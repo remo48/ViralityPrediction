@@ -1,14 +1,19 @@
 import numpy as np
 import pandas as pd
-from datetime import datetime
+import datetime
+import os
+import sys
 
 source_dir = '../data/'
 dest_dir = '../data/'
 raw_data_file = source_dir + 'raw_data_anon.csv'
 raw_emotions_file = source_dir + 'emotions_anon.csv'
+raw_metadata_file = source_dir + 'metadata_anon.txt'
 tweets_file = dest_dir + 'tweets.csv'
 emotions_file = dest_dir + 'emotions.csv'
 
+try: os.chdir(os.path.dirname(sys.argv[0]))
+except: pass
 
 def timediff(t1, t2):
     """
@@ -24,7 +29,7 @@ def timediff(t1, t2):
 
 df = pd.read_csv(raw_data_file, na_values='None')
 
-# iser verified
+# user verified
 df['user_verified'] = df.user_verified.fillna(False).astype(int)
 
 # veracity
@@ -33,7 +38,7 @@ df.loc[df.veracity == 'TRUE', 'veracity'] = True
 
 df = df[df.veracity.isin([False, True])]
 
-df['datetime'] = [datetime.strptime(s, '%Y-%m-%d %H:%M:%S') for s in df.tweet_date]
+df['datetime'] = [datetime.datetime.strptime(s, '%Y-%m-%d %H:%M:%S') for s in df.tweet_date]
 # select tweets with children and rename then to parent
 parents = df.loc[df.was_retweeted == 1, ['tid', 'datetime']]
 parents.columns = ['parent_' + c for c in parents.columns]
@@ -61,6 +66,22 @@ roots.rename(columns={'datetime': 'root_datetime'}, inplace=True)
 df = pd.merge(df, roots, on='cascade_id')
 df['root_delay'] = [timediff(time, root_time) for time, root_time in zip(df.datetime, df.root_datetime)]
 del roots
+
+# include metadata
+META_VARS = ['virality']
+meta = []
+with open(raw_metadata_file, 'r') as fin:
+    for line in fin.readlines():
+        cascade_id, metadata = eval(line)
+        metadata = {k:metadata[k] for k in META_VARS}
+        metadata['cascade_id'] = cascade_id
+        meta.append(metadata)
+
+df_meta = pd.DataFrame(meta)
+df_meta['virality'] = df_meta.virality.fillna(False).astype(float)
+df = pd.merge(df, df_meta, on='cascade_id')
+del df_meta
+del meta
 
 
 df.sort_values(['cascade_id', 'tid'], inplace=True)
