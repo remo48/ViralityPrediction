@@ -1,4 +1,6 @@
 data/
 .vscode/
-__pycache__/
 results/
+__pycache__/
+node_modules/
+playground.ipynb
