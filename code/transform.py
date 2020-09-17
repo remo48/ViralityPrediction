@@ -96,8 +96,7 @@ def reverse(g, share_ndata=False, share_edata=False):
             [2.],
             [3.]])
     """
-    assert not isinstance(g, BatchedDGLGraph), \
-        'reverse is not supported for a BatchedDGLGraph object'
+
     g_reversed = DGLGraph(multigraph=g.is_multigraph)
     g_reversed.add_nodes(g.number_of_nodes())
     g_edges = g.edges()

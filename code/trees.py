@@ -56,14 +56,15 @@ class TreeLSTM(nn.Module):
         out
         """
         g = batch.graph
-        g.register_message_func(self.cell.message_func)
-        g.register_reduce_func(self.cell.reduce_func)
-        g.register_apply_node_func(self.cell.apply_node_func)    
         g.ndata['iou'] = self.cell.W_iou(batch.X)
         g.ndata['h'] = h
         g.ndata['c'] = c
         # propagate
-        dgl.prop_nodes_topo(g)
+        dgl.prop_nodes_topo(g, 
+                            message_func=self.cell.message_func,
+                            reduce_func=self.cell.reduce_func,
+                            apply_node_func=self.cell.apply_node_func
+                            )
         # compute logits
         h = g.ndata.pop('h')
         
@@ -88,16 +89,15 @@ class BiDiTreeLSTM(nn.Module):
         self.cell_bottom_up = ChildSumTreeLSTMCell(x_size, h_size)
         self.cell_top_down = ChildSumTreeLSTMCell(x_size+h_size, h_size)
 
-    def propagate(self, g, cell, X, h, c):
-        g.register_message_func(cell.message_func)
-        g.register_reduce_func(cell.reduce_func)
-        g.register_apply_node_func(cell.apply_node_func)    
-        #g.ndata['iou'] = cell.d(cell.W_iou(X))
+    def propagate(self, g, cell, X, h, c):   
         g.ndata['iou'] = cell.W_iou(X)
         g.ndata['h'] = h
         g.ndata['c'] = c
         # propagate
-        dgl.prop_nodes_topo(g)
+        dgl.prop_nodes_topo(g,
+                            message_func=cell.message_func,
+                            reduce_func=cell.reduce_func,
+                            apply_node_func=cell.apply_node_func)
 
         return g.ndata.pop('h')
 
@@ -144,7 +144,7 @@ class BiDiTreeLSTM(nn.Module):
         return out
 
 class DeepTreeLSTM(nn.Module):
-    def __init__(self, x_size, h_size, num_classes, emo_size, top_sizes, pd, bi, deep, logit=True):
+    def __init__(self, x_size, h_size, num_classes, emo_size, top_sizes, pd, bi, deep, logit=False):
         
         super(DeepTreeLSTM, self).__init__()
         
@@ -173,8 +173,8 @@ class DeepTreeLSTM(nn.Module):
 
             net.add_module('d_out', nn.Dropout(p=pd))
             net.add_module('l_out', nn.Linear(top_sizes[-1],num_classes))
-            if logit:
-                net.add_module('tf_out', nn.Sigmoid())
+            #if logit:
+            #    net.add_module('tf_out', nn.Sigmoid())
         else:
             net.add_module('d', nn.Dropout(p=pd))
             net.add_module('l', nn.Linear(2*h_size, num_classes))

@@ -47,12 +47,12 @@ def save_cascades(df, df_emo, to_encode, name_append=''):
 
         th_emo = th.Tensor(emo.iloc[:, 1:].values)
         th_ver = th.tensor([[small.veracity[0]]])
-        th_vir = th.tensor([[small.virality[0]]])
+        th_vir = th.tensor([[small.virality[0]]], dtype=th.float32)
         X = th.Tensor(small[to_encode].values)
         is_leaf = th.Tensor(small.is_leaf.values)
         src, dest = small.new_tid[1:].values, small.new_parent_tid[1:].values
 
-        c = Cascade(cid, X, th_ver, th_emo, src, dest, is_leaf)
+        c = Cascade(cid, X, th_vir, th_emo, src, dest, is_leaf)
 
         th.save(c, graphs_dir + str(cid) + name_append + '.pt')
 
@@ -105,7 +105,7 @@ def get_new_tid(df):
     parents = df[['cascade_id', 'tid', 'new_tid']]
     parents = parents.rename({'tid': 'parent_tid', 'new_tid': 'new_parent_tid'}, axis=1)
     df = pd.merge(df, parents, on=['cascade_id', 'parent_tid'], how='left')
-    df.loc[df.new_parent_tid.isna(), 'new_parent_tid'] = -1
+    df['new_parent_tid'] = df['new_parent_tid'].fillna(-1).astype('int64')
     return df['new_tid'], df['new_parent_tid']
 
 
@@ -169,7 +169,7 @@ def to_grouped(df, to_group):
     aggs = {k: 'mean' for k in to_group}
     aggs['n_children_log'] = 'max' 
         
-    grouped = df.groupby(['cascade_id', 'veracity']).agg(aggs).reset_index()
+    grouped = df.groupby(['cascade_id', 'virality']).agg(aggs).reset_index()
 
     sizes = []
     depths = []
@@ -246,10 +246,10 @@ crop_thresh_time = {
     'half_hour': 60 * 30,
     '1_hour': 60. * 60,
     '2_hour': 60. * 60 * 2,
-    '3_hour': 60. * 60 * 3, 
-    '6_hour': 60. * 60 * 6,
-    '12_hour': 60. * 60 * 12,
-    '24_hour': 60. * 60 * 24}
+    '3_hour': 60. * 60 * 3}
+#    '6_hour': 60. * 60 * 6,
+#    '12_hour': 60. * 60 * 12,
+#    '24_hour': 60. * 60 * 24}
 
     
 crop_thresh_number = {
@@ -349,7 +349,7 @@ for (df_tweets, df_emo, post) in zip(*[(tweets_train.copy(), tweets_test.copy())
 # LOOP FOR CROPPED CASCADES
 
 # loop through cropping modes (train and test)
-for (crop_dict, mode) in [(crop_thresh_time, 'time'), (crop_thresh_number, 'number')]:
+for (crop_dict, mode) in [(crop_thresh_time, 'time')]:
     # loop through cropping thresholds in cropping mode
     for k, v in crop_dict.items():  
         # loop through train and test

@@ -94,8 +94,8 @@ test_set = CascadeData(test_ids, variant=args.variant, structureless=args.struct
 train_generator = DataLoader(train_set, collate_fn=cascade_batcher(device), batch_size= args.batch_size)
 test_generator = DataLoader(test_set, collate_fn=cascade_batcher(device), batch_size= args.batch_size)
 
-r_train = class_ratio(train_generator)
-r_test = class_ratio(test_generator)
+#r_train = class_ratio(train_generator)
+#r_test = class_ratio(test_generator)
 
 
 h_size = args.h_size
@@ -125,15 +125,14 @@ if args.cuda and th.cuda.is_available():
 
 init_net(deep_tree)
 
-criterion = nn.BCEWithLogitsLoss(pos_weight = th.Tensor([r_train])).to(device)
-crit_eval = nn.BCEWithLogitsLoss(pos_weight = th.Tensor([r_test])).to(device)
-optimizer_tree = optim.Adam(deep_tree.bottom_net.parameters(), lr = lr_tree, weight_decay = decay_tree)
-optimizer_top = optim.Adam(deep_tree.top_net.parameters(), lr = lr_top, weight_decay = decay_top)
+criterion = nn.MSELoss().to(device)
+optimizer_tree = optim.SGD(deep_tree.bottom_net.parameters(), lr = lr_tree, weight_decay = decay_tree)
+optimizer_top = optim.SGD(deep_tree.top_net.parameters(), lr = lr_top, weight_decay = decay_top)
 scheduler_tree = optim.lr_scheduler.StepLR(optimizer_tree, step_size=5, gamma=0.9)
 scheduler_top = optim.lr_scheduler.StepLR(optimizer_top, step_size=5, gamma=0.9)
 
 
-best_state, best_metrics, best_epoch = None, {'auc':0.}, 0.
+best_state, best_metrics, best_epoch = None, {'loss':1000.}, 0.
 
 print("Started experiment  " + experiment_id)
 
@@ -168,7 +167,7 @@ for epoch in range(epochs):
     
     with th.no_grad():
         
-        tr_metrics = calc_metrics(ys, y_hats, ['loss', 'acc', 'auc'], device, criterion)
+        tr_metrics = calc_metrics(ys, y_hats, ['loss', 'rmse', 'mse'], device, criterion)
     
         ys, y_hats = [], []
         
@@ -180,28 +179,28 @@ for epoch in range(epochs):
             y_hats.append(y_hat.detach())
             test_ids.append(batch.ID)
 
-        te_metrics = calc_metrics(ys, y_hats, ['loss', 'acc', 'auc', 'precision', 'recall', 'f1'], device, criterion)
+        te_metrics = calc_metrics(ys, y_hats, ['loss', 'rmse', 'mse'], device, criterion)
             
                 
     if verb: print("Epoch {:03d} | "
-                   "Train Loss {:.3f} | Train Acc {:.3f} | Train AUC {:.3f} | "
-                   "Test Loss {:.3f} | Test Acc {:.3f} | Test AUC {:.3f}".format(epoch, 
-    tr_metrics['loss'], tr_metrics['acc'], tr_metrics['auc'],
-    te_metrics['loss'], te_metrics['acc'], te_metrics['auc']))
+                   "Train Loss {:.3f} "
+                   "Test Loss {:.3f} "
+                   "Test RMSE {:.3f} ".format(epoch, 
+    tr_metrics['loss'],
+    te_metrics['loss'], te_metrics['rmse']))
     
-    if te_metrics['auc'] > best_metrics['auc'] :
+    if te_metrics['loss'] < best_metrics['loss'] :
         best_metrics = te_metrics
         best_state = deep_tree.state_dict()
         best_epoch = epoch
         th.save(best_state, params_path)
         ys = th.cat(ys, dim = 0).flatten().tolist()
-        y_hats = sig(th.cat(y_hats, dim = 0)).flatten().tolist()
+        y_hats = th.cat(y_hats, dim = 0).flatten().tolist()
         test_ids = th.cat(test_ids, dim = 0).flatten().tolist()
         df_res = pd.DataFrame({'id':test_ids, 'y':ys, 'y_hat':y_hats})
         df_res.to_csv(preds_path, index=False, header=True)
-        print ("Model %s saved with test AUC %.4f | train AUC %.4f at epoch %d" % (experiment_id, te_metrics['auc'], tr_metrics['auc'], epoch))
+        print ("Model %s saved with test loss %.4f | train loss %.4f | test rmse %.4f at epoch %d" % (experiment_id, te_metrics['loss'], tr_metrics['loss'], te_metrics['rmse'], epoch))
 
-print ("Experiment %s terminated with test AUC %.4f at epoch %d" % (experiment_id, best_metrics['auc'], epoch))
+print ("Experiment %s terminated with test loss %.4f | test rmse %.4f at epoch %d" % (experiment_id, best_metrics['loss'], best_metrics['rmse'], epoch))
         
 log_results(experiment_id, args, best_epoch, best_metrics)
-    

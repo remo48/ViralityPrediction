@@ -8,7 +8,7 @@ import dgl
 import matplotlib.pyplot as plt
 import networkx as nx
 from random import shuffle
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
+from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, mean_squared_error
 from transform import reverse
 from copy import deepcopy
 
@@ -102,6 +102,12 @@ def calc_metrics(ys, y_hats, to_calc, device, criterion=False):
         
     if 'f1' in to_calc:
         metrics['f1'] = f1_score(y.cpu(), y_pred.cpu(), average='weighted')
+
+    if 'rmse' in to_calc:
+        metrics['rmse'] = mean_squared_error(y.cpu(), y_pred.cpu())**.5
+
+    if 'mse' in to_calc:
+        metrics['mse'] = mean_squared_error(y.cpu(), y_pred.cpu())
         
     return metrics
 
