@@ -1,7 +1,6 @@
 import torch as th
 import torch.nn as nn
 import dgl
-from transform import reverse
 
 
 class ChildSumTreeLSTMCell(nn.Module):
@@ -39,7 +38,7 @@ class TreeLSTM(nn.Module):
         self.x_size = x_size
         self.cell = ChildSumTreeLSTMCell(x_size, h_size)
 
-    def forward(self, batch, h, c):
+    def forward(self, batch, g, h, c):
         """Compute tree-lstm prediction given a batch.
 
         Parameters
@@ -55,7 +54,6 @@ class TreeLSTM(nn.Module):
         -------
         out
         """
-        g = batch.graph
         g.ndata['iou'] = self.cell.W_iou(batch.X)
         g.ndata['h'] = h
         g.ndata['c'] = c
@@ -65,16 +63,16 @@ class TreeLSTM(nn.Module):
                             reduce_func=self.cell.reduce_func,
                             apply_node_func=self.cell.apply_node_func
                             )
-        # compute logits
+
         h = g.ndata.pop('h')
         
         # indexes of root nodes
-        head_ids = batch.isroot.nonzero().flatten()
+        head_ids = th.nonzero(batch.isroot, as_tuple=False).flatten()
         # h of root nodes
         head_h = th.index_select(h, 0, head_ids)
         lims_ids = head_ids.tolist() + [g.number_of_nodes()]
         # average of h of non root node by tree
-        inner_h = th.cat([th.mean(h[s+1:e-1,:],dim=0).view(1,-1) for s, e in zip(lims_ids[:-1],lims_ids[1:])])
+        inner_h = th.cat([th.mean(h[s+1:e,:],dim=0).view(1,-1) for s, e in zip(lims_ids[:-1],lims_ids[1:])])
         out = th.cat([head_h, inner_h], dim = 1)
         #out = head_h
         return out
@@ -101,7 +99,7 @@ class BiDiTreeLSTM(nn.Module):
 
         return g.ndata.pop('h')
 
-    def forward(self, batch, h, c):
+    def forward(self, batch, g, h, c):
         """Compute tree-lstm prediction given a batch.
 
         Parameters
@@ -117,16 +115,15 @@ class BiDiTreeLSTM(nn.Module):
         -------
         out
         """
-
-        g = batch.graph
         h_bottom_up = self.propagate(g, self.cell_bottom_up, batch.X, h, c)
         
-        g_rev = dgl.batch([reverse(gu) for gu in dgl.unbatch(batch.graph)])
+        g_rev = dgl.reverse(g)
+        #g_rev = dgl.batch([gu.reverse() for gu in dgl.unbatch(batch.graph)])
         h_top_down = self.propagate(g_rev, self.cell_top_down, th.cat([batch.X, h_bottom_up], dim = 1), h, c)
         
         
         # indexes of root nodes
-        root_ids = batch.isroot.nonzero().flatten()
+        root_ids = th.nonzero(batch.isroot, as_tuple=False).flatten()
         # h of root nodes
         root_h_bottom_up = th.index_select(h_bottom_up, 0, root_ids)
         
@@ -135,16 +132,14 @@ class BiDiTreeLSTM(nn.Module):
         
         trees_h = [h_top_down[s:e,:] for s, e in zip(lims_ids[:-1],lims_ids[1:])]
         trees_isleaf = [batch.isleaf[s:e] for s, e in zip(lims_ids[:-1],lims_ids[1:])]
-        leaves_h_top_down = th.cat([th.mean(th.index_select(tree, 0, leaves.nonzero().flatten()),dim=0).view(1,-1) for (tree, leaves) in zip(trees_h, trees_isleaf)], dim = 0)
+        leaves_h_top_down = th.cat([th.mean(th.index_select(tree, 0, th.nonzero(leaves, as_tuple=False).flatten()),dim=0).view(1,-1) for (tree, leaves) in zip(trees_h, trees_isleaf)], dim = 0)
                 
-        # average of h of non root node by tree
-        #inner_h_top_down = th.cat([th.mean(h_top_down[s+1:e-1,:],dim=0).view(1,-1) for s, e in zip(lims_ids[:-1],lims_ids[1:])])
         out = th.cat([root_h_bottom_up, leaves_h_top_down], dim = 1)
-        #out = root_h_bottom_up
+        #out = leaves_h_top_down
         return out
 
 class DeepTreeLSTM(nn.Module):
-    def __init__(self, x_size, h_size, num_classes, emo_size, top_sizes, pd, bi, deep, logit=False):
+    def __init__(self, x_size, h_size, num_classes, emo_size, top_sizes, pd, bi, deep):
         
         super(DeepTreeLSTM, self).__init__()
         
@@ -173,8 +168,7 @@ class DeepTreeLSTM(nn.Module):
 
             net.add_module('d_out', nn.Dropout(p=pd))
             net.add_module('l_out', nn.Linear(top_sizes[-1],num_classes))
-            #if logit:
-            #    net.add_module('tf_out', nn.Sigmoid())
+
         else:
             net.add_module('d', nn.Dropout(p=pd))
             net.add_module('l', nn.Linear(2*h_size, num_classes))
@@ -182,9 +176,9 @@ class DeepTreeLSTM(nn.Module):
         self.top_net = net
 
         
-    def forward(self, batch, h, c):
+    def forward(self, batch, g, h, c):
         # output of TreeLSTM
-        h_top = self.bottom_net.forward(batch, h, c)
+        h_top = self.bottom_net.forward(batch, g, h, c)
         # concatenate emotions w. output of TreeLSTM
         if self.deep:
             X2 = th.cat([h_top, batch.emo], dim = 1)

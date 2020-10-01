@@ -2,7 +2,7 @@ from imblearn.under_sampling import RandomUnderSampler, TomekLinks, Neighbourhoo
 from imblearn.over_sampling import RandomOverSampler
 
 # samplers to apply
-samplers = [RandomOverSampler(0.3), TomekLinks(), NeighbourhoodCleaningRule()]
+samplers = [RandomOverSampler(sampling_strategy=0.3), TomekLinks(), NeighbourhoodCleaningRule()]
 
 
 class IterativeSampler():

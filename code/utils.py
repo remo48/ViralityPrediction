@@ -8,13 +8,14 @@ import dgl
 import matplotlib.pyplot as plt
 import networkx as nx
 from random import shuffle
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, mean_squared_error
-from transform import reverse
+from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, mean_squared_error, mean_absolute_error
 from copy import deepcopy
 
 
 # load batch
-ld = lambda ID: th.load('../data/graphs/' + ID + '.pt')
+def ld(ID, graphs_dir):
+    return th.load(graphs_dir + ID + '.pt')
+
 
 # cascade batch named tuple. Used to create a "batch of graphs"
 # for parallel processing from a list of graphs
@@ -104,11 +105,14 @@ def calc_metrics(ys, y_hats, to_calc, device, criterion=False):
         metrics['f1'] = f1_score(y.cpu(), y_pred.cpu(), average='weighted')
 
     if 'rmse' in to_calc:
-        metrics['rmse'] = mean_squared_error(y.cpu(), y_pred.cpu())**.5
+        metrics['rmse'] = mean_squared_error(y.cpu(), y_hat.cpu())**.5
 
     if 'mse' in to_calc:
-        metrics['mse'] = mean_squared_error(y.cpu(), y_pred.cpu())
-        
+        metrics['mse'] = mean_squared_error(y.cpu(), y_hat.cpu())
+
+    if 'mae' in to_calc:
+        metrics['mae'] = mean_absolute_error(y.cpu(), y_hat.cpu())
+         
     return metrics
 
 
@@ -116,20 +120,20 @@ def init_net(net):
     # initialize weights of cascade lstm
     for name, param in net.named_parameters():
         if 'bias' in name:
-            nn.init.constant(param, 0.0)
+            nn.init.constant_(param, 0.0)
         elif 'weight' in name:
-            nn.init.xavier_normal(param)
+            nn.init.xavier_normal_(param)
             
             
 to_save = ('h_size', 'lr_tree', 'lr_top', 'decay_tree', 'decay_top', 'p_drop', 'sample',
-           'leaf_ins', 'node_reor', 'emo_pert', 'deep', 'bi', 'structureless', 'test', 'variant')
+           'leaf_ins', 'node_reor', 'emo_pert', 'deep', 'bi', 'structureless', 'variant')
 
 
-def log_results(experiment_id, args, epoch, metrics, name='logs_final.csv', to_save=to_save):
+def log_results(experiment_id, args, out_dir, epoch, metrics, name='logs_final.csv', to_save=to_save):
     """
     log results of cascade lstm
     """
-    dest = args.out_dir + name
+    dest = out_dir + name
     # convert args (model parameters) from command line args to dict
     args_dict = vars(args)
     # select args to save in logs

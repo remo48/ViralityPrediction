@@ -7,17 +7,12 @@ sys.path.append('../code/')
 
 import numpy as np
 import torch as th
-import dgl
 import pandas as pd
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
-from random import shuffle
-import torch.nn as nnz
-import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader
 import argparse
 from datetime import datetime
 from utils import *
-from collections import Counter
 from klasses import CascadeData
 from trees import DeepTreeLSTM
 
@@ -26,33 +21,28 @@ if not sys.warnoptions:
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--g_dir', dest = 'graphs_dir', default = '../data/graphs/')
 parser.add_argument('--x_size', dest = 'x_size', default = 12, type = int)
-parser.add_argument('--h_size', dest = 'h_size', default = 3, type = int)
+parser.add_argument('--h_size', dest = 'h_size', default = 24, type = int)
 parser.add_argument('--nc', dest = 'num_classes', default = 1, type = int)
 parser.add_argument('--sample', dest = 'sample', action='store_true')
 parser.add_argument('--bsize', dest = 'batch_size', default = 25, type = int)
 parser.add_argument('--pd', dest = 'p_drop', default = 0.1, type = float)
-parser.add_argument('--epochs', dest = 'epochs', default = 50, type = int)
+parser.add_argument('--epochs', dest = 'epochs', default = 70, type = int)
 parser.add_argument('--lr_tree', dest = 'lr_tree', default = 0.01, type = float)
 parser.add_argument('--lr_top', dest = 'lr_top', default = 0.01, type = float)
 parser.add_argument('--decay_tree', dest = 'decay_tree', default = 0.003, type = float)
 parser.add_argument('--decay_top', dest = 'decay_top', default = 0.006, type = float)
-parser.add_argument('--out_dir', dest = 'out_dir', default = '../results/')
 parser.add_argument('--cuda', action='store_true')
 parser.add_argument('--gpu', dest = 'gpu', type = str, default = "")
 parser.add_argument('--leaf_ins', action='store_true', default = False)
 parser.add_argument('--node_reor', action='store_true', default = False)
 parser.add_argument('--emo_pert', action='store_true', default = False)
-parser.add_argument('--verbose', action='store_true', default = False)
+parser.add_argument('--verbose', type=int, default = 0)
 parser.add_argument('--save_ids', action='store_true', default = False)
 parser.add_argument('--deep', default = 1, type=int)
 parser.add_argument('--bi', default = 1, type=int)
 parser.add_argument('--variant', type = str, default = '')
 parser.add_argument('--structureless', action='store_true', default = False)
-parser.add_argument('--test', action='store_true', default = False)
-
-
 
 args = parser.parse_args()
 variant = args.variant
@@ -60,42 +50,32 @@ variant = args.variant
 experiment_id = datetime.now().strftime("%m_%d_%Y__%H_%M_%S__%f") 
 
 verb = args.verbose
+data_dir = '../data/'
+graphs_dir = '../data/graphs/'
+out_dir = '../results/'
 
 if args.cuda:
     os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3"
-    if verb: print("There are %d devices available" % th.cuda.device_count())
+    if verb==2: print("There are %d devices available" % th.cuda.device_count())
     
 device = set_device(args.cuda, args.gpu)
 
-sig = nn.Sigmoid().to(device)
-
 def learn(model, batch, device, h_size):
-    n = batch.graph.number_of_nodes()
+    g = batch.graph.to(device)
+    n = g.number_of_nodes()
     h = th.zeros((n, h_size)).to(device)
     c = th.zeros((n, h_size)).to(device)
-    y_hat = model(batch, h, c)
+    y_hat = model(batch, g, h, c)
     return batch.y.to(device), y_hat
 
-ids = np.array([ID.split('.')[0] for ID in os.listdir(args.graphs_dir) if '_' not in ID])
+train_ids = np.array([ID.split('.')[0] for ID in os.listdir(graphs_dir) if '_' not in ID])
+test_ids = np.unique([ID.split('_')[0] for ID in os.listdir(graphs_dir) if 'test' in ID])
 
-if not args.test:
-    split_ratio = 0.85
-    split = int(len(ids) * split_ratio)
-    shuffle(ids)
-    train_ids, test_ids = ids[:split], ids[split:]
-else:
-    train_ids = ids
-    test_ids = np.unique([ID.split('_')[0] for ID in os.listdir(args.graphs_dir) if 'test' in ID])
-
-
-train_set = CascadeData(train_ids, args.sample, args.leaf_ins, args.node_reor, args.emo_pert, variant=args.variant, structureless=args.structureless)
-test_set = CascadeData(test_ids, variant=args.variant, structureless=args.structureless, test = args.test)
+train_set = CascadeData(train_ids, 'cascade_size_log', data_dir, args.sample, args.leaf_ins, args.node_reor, args.emo_pert, variant=args.variant, structureless=args.structureless)
+test_set = CascadeData(test_ids, 'cascade_size_log', data_dir, variant=args.variant, structureless=args.structureless, test = True)
 
 train_generator = DataLoader(train_set, collate_fn=cascade_batcher(device), batch_size= args.batch_size)
 test_generator = DataLoader(test_set, collate_fn=cascade_batcher(device), batch_size= args.batch_size)
-
-#r_train = class_ratio(train_generator)
-#r_test = class_ratio(test_generator)
 
 
 h_size = args.h_size
@@ -114,11 +94,11 @@ decay_top = args.decay_top
 bi = bool(args.bi)
 deep = bool(args.deep)
 
-params_path = args.out_dir + 'model_' + experiment_id + '.pt'
-preds_path = args.out_dir + 'preds_' + experiment_id + '.csv'
+params_path = out_dir + 'model_' + experiment_id + '.pt'
+preds_path = out_dir + 'preds_' + experiment_id + '.csv'
 
 
-deep_tree = DeepTreeLSTM(x_size, h_size, num_classes, emo_size, top_sizes, p_drop, bi=bool(bi), deep=bool(deep), logit=False)
+deep_tree = DeepTreeLSTM(x_size, h_size, num_classes, emo_size, top_sizes, p_drop, bi=bool(bi), deep=bool(deep))
 
 if args.cuda and th.cuda.is_available():
 	deep_tree.to(device)
@@ -132,7 +112,7 @@ scheduler_tree = optim.lr_scheduler.StepLR(optimizer_tree, step_size=5, gamma=0.
 scheduler_top = optim.lr_scheduler.StepLR(optimizer_top, step_size=5, gamma=0.9)
 
 
-best_state, best_metrics, best_epoch = None, {'loss':1000.}, 0.
+best_state, best_metrics, best_epoch = None, {'loss':np.inf}, 0.
 
 print("Started experiment  " + experiment_id)
 
@@ -155,19 +135,19 @@ for epoch in range(epochs):
         optimizer_top.step()
         ys.append(y.detach())
         y_hats.append(y_hat.detach())
-        if verb: 
+        if verb==2: 
             print("#", end="", flush=True)
     
     scheduler_tree.step()
     scheduler_top.step()
-    if verb: 
+    if verb==2: 
         print("")
         
     deep_tree.eval()
     
     with th.no_grad():
         
-        tr_metrics = calc_metrics(ys, y_hats, ['loss', 'rmse', 'mse'], device, criterion)
+        tr_metrics = calc_metrics(ys, y_hats, ['loss', 'rmse', 'mse', 'mae'], device, criterion)
     
         ys, y_hats = [], []
         
@@ -179,16 +159,22 @@ for epoch in range(epochs):
             y_hats.append(y_hat.detach())
             test_ids.append(batch.ID)
 
-        te_metrics = calc_metrics(ys, y_hats, ['loss', 'rmse', 'mse'], device, criterion)
+        te_metrics = calc_metrics(ys, y_hats, ['loss', 'rmse', 'mse', 'mae'], device, criterion)
             
+    if verb==0: print("Epoch {:03d} | "
+                   "Train Loss {:.3f} | "
+                   "Test Loss {:.3f} | ".format(epoch, 
+        tr_metrics['loss'],
+        te_metrics['loss']))
                 
-    if verb: print("Epoch {:03d} | "
-                   "Train Loss {:.3f} "
-                   "Test Loss {:.3f} "
-                   "Test RMSE {:.3f} ".format(epoch, 
-    tr_metrics['loss'],
-    te_metrics['loss'], te_metrics['rmse']))
-    
+    else: print("Epoch {:03d} | "
+                   "Train Loss {:.3f} | "
+                   "Train MAE {:.3f} | "
+                   "Test Loss {:.3f} | "
+                   "Test MAE {:.3f}".format(epoch, 
+        tr_metrics['loss'], tr_metrics['mae'],
+        te_metrics['loss'], te_metrics['mae']))
+
     if te_metrics['loss'] < best_metrics['loss'] :
         best_metrics = te_metrics
         best_state = deep_tree.state_dict()
@@ -199,8 +185,8 @@ for epoch in range(epochs):
         test_ids = th.cat(test_ids, dim = 0).flatten().tolist()
         df_res = pd.DataFrame({'id':test_ids, 'y':ys, 'y_hat':y_hats})
         df_res.to_csv(preds_path, index=False, header=True)
-        print ("Model %s saved with test loss %.4f | train loss %.4f | test rmse %.4f at epoch %d" % (experiment_id, te_metrics['loss'], tr_metrics['loss'], te_metrics['rmse'], epoch))
+        if verb==2: print ("Model %s saved with test loss %.4f | train loss %.4f | test RMSE %.4f at epoch %d" % (experiment_id, te_metrics['loss'], tr_metrics['loss'], te_metrics['rmse'], epoch))
 
 print ("Experiment %s terminated with test loss %.4f | test rmse %.4f at epoch %d" % (experiment_id, best_metrics['loss'], best_metrics['rmse'], epoch))
         
-log_results(experiment_id, args, best_epoch, best_metrics)
+log_results(experiment_id, args, out_dir, best_epoch, best_metrics)

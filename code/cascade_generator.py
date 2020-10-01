@@ -1,5 +1,6 @@
 import sys
 import os
+import shutil
 import warnings
 import numpy as np
 from random import shuffle
@@ -20,7 +21,6 @@ except: pass
 
 if not sys.warnoptions:
     warnings.simplefilter("ignore")
-
 
 def save_cascades(df, df_emo, to_encode, name_append=''):
     """
@@ -46,13 +46,23 @@ def save_cascades(df, df_emo, to_encode, name_append=''):
             continue
 
         th_emo = th.Tensor(emo.iloc[:, 1:].values)
+
+        # target variables
         th_ver = th.tensor([[small.veracity[0]]])
         th_vir = th.tensor([[small.virality[0]]], dtype=th.float32)
+        th_cascade_size_log = th.tensor([[small.cascade_size_log[0]]], dtype=th.float32)
+        th_cascade_followers_log = th.tensor([[small.cascade_followers_log[0]]], dtype=th.float32)
+        target_vars = {'veracity':th_ver,
+                       'virality': th_vir,
+                       'cascade_size_log': th_cascade_size_log,
+                       'cascade_followers_log': th_cascade_followers_log,
+                       }
+
         X = th.Tensor(small[to_encode].values)
         is_leaf = th.Tensor(small.is_leaf.values)
         src, dest = small.new_tid[1:].values, small.new_parent_tid[1:].values
 
-        c = Cascade(cid, X, th_vir, th_emo, src, dest, is_leaf)
+        c = Cascade(cid, X, target_vars, th_emo, src, dest, is_leaf)
 
         th.save(c, graphs_dir + str(cid) + name_append + '.pt')
 
@@ -169,7 +179,7 @@ def to_grouped(df, to_group):
     aggs = {k: 'mean' for k in to_group}
     aggs['n_children_log'] = 'max' 
         
-    grouped = df.groupby(['cascade_id', 'virality']).agg(aggs).reset_index()
+    grouped = df.groupby(['cascade_id', 'cascade_size_log', 'cascade_followers_log', 'cascade_size', 'cascade_followers']).agg(aggs).reset_index()
 
     sizes = []
     depths = []
@@ -198,6 +208,17 @@ dest_dir = '../data/'
 graphs_dir = dest_dir + 'graphs/'
 tweets_file = source_dir + 'tweets.csv'
 emotions_file = source_dir + 'emotions.csv'
+
+print('delete graphs in graph directory')
+for filename in os.listdir(graphs_dir):
+    file_path = os.path.join(graphs_dir, filename)
+    try:
+        if os.path.isfile(file_path) or os.path.islink(file_path):
+            os.unlink(file_path)
+        elif os.path.isdir(file_path):
+            shutil.rmtree(file_path)
+    except Exception as e:
+        print('Failed to delete %s. Reason: %s' % (file_path, e))
 
 to_encode = ['user_followers_log',
              'user_followees_log',
@@ -246,10 +267,10 @@ crop_thresh_time = {
     'half_hour': 60 * 30,
     '1_hour': 60. * 60,
     '2_hour': 60. * 60 * 2,
-    '3_hour': 60. * 60 * 3}
-#    '6_hour': 60. * 60 * 6,
-#    '12_hour': 60. * 60 * 12,
-#    '24_hour': 60. * 60 * 24}
+    '3_hour': 60. * 60 * 3,
+    '6_hour': 60. * 60 * 6,
+    '12_hour': 60. * 60 * 12,
+    '24_hour': 60. * 60 * 24}
 
     
 crop_thresh_number = {
@@ -265,9 +286,6 @@ split_ratio = 0.85
 
 tweets = pd.read_csv(tweets_file)
 print(tweets.shape)
-tweets.head()
-
-#tweets.drop(to_drop, axis=1, inplace=True)
 
 tweets['veracity'] = tweets['veracity'].astype(float)
 
@@ -305,7 +323,7 @@ tweets_train[['user_followers', 'user_followees', 'user_account_age']] = si.fit_
 tweets_test[['user_followers', 'user_followees', 'user_account_age']] = si.transform(tweets_test[['user_followers', 'user_followees', 'user_account_age']].values)
 
 # get log of vars
-for cname in ['user_followers', 'user_followees', 'user_engagement', 'user_account_age', 'retweet_delay']:
+for cname in ['user_followers', 'user_followees', 'user_engagement', 'user_account_age', 'retweet_delay', 'cascade_followers', 'cascade_size']:
     tweets_train[cname + '_log'] = logp(tweets_train[cname].values)
     tweets_test[cname + '_log'] = logp(tweets_test[cname].values)
     
@@ -337,9 +355,9 @@ for (df_tweets, df_emo, post) in zip(*[(tweets_train.copy(), tweets_test.copy())
     grouped = to_grouped(not_cropped, to_group)
     
     if post == '':
-        grouped.iloc[:, 2:] = ss_grouped.fit_transform(grouped.iloc[:, 2:])
+        grouped.iloc[:, 5:] = ss_grouped.fit_transform(grouped.iloc[:, 5:])
     else:
-        grouped.iloc[:, 2:] = ss_grouped.transform(grouped.iloc[:, 2:])
+        grouped.iloc[:, 5:] = ss_grouped.transform(grouped.iloc[:, 5:])
 
     pd.merge(grouped, df_emo, on='cascade_id').to_csv(dest_dir + 'grouped' + post + '.csv', header=True, index=False)
 
@@ -362,9 +380,9 @@ for (crop_dict, mode) in [(crop_thresh_time, 'time')]:
 
             grouped = to_grouped(cropped, to_group)            
             if post == '':
-                grouped.iloc[:, 2:] = ss_grouped.fit_transform(grouped.iloc[:, 2:])
+                grouped.iloc[:, 5:] = ss_grouped.fit_transform(grouped.iloc[:, 5:])
             else:
-                grouped.iloc[:, 2:] = ss_grouped.transform(grouped.iloc[:, 2:])
+                grouped.iloc[:, 5:] = ss_grouped.transform(grouped.iloc[:, 5:])
             
             pd.merge(grouped, df_emo, on='cascade_id').to_csv(dest_dir + 'grouped_' + k + post + '.csv', header=True, index=False)
 

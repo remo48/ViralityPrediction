@@ -4,7 +4,6 @@ import dgl
 import pandas as pd
 import numpy as np
 from utils import leaf_insertion, node_reordering, perturbate, ld
-from transform import reverse
 from sampler import IterativeSampler
 from random import shuffle
 
@@ -14,13 +13,13 @@ class Cascade:
     class that contains a single cascade. The cascade data structure
     is save and then loaded in ".pt" ~ pytorch format.
     """
-    def __init__(self, cascade_id, X, y, emo, src, dest, isleaf):
+    def __init__(self, cascade_id, X, target_vars, emo, src, dest, isleaf):
         # init the cascade data structure with data
 
         self.cascade_id = cascade_id
         # node covariates
         self.X = X
-        self.y = y
+        self.target_vars = target_vars
         self.size = X.shape[0]
         self.isleaf = isleaf
         self.isroot = th.cat([th.Tensor([1]), th.zeros(self.size - 1)])
@@ -33,20 +32,19 @@ class Cascade:
         edges and node data
         """
 
-        g = dgl.DGLGraph()
-        g.add_nodes(self.size)
+        src, dest = self.edges['src'], self.edges['dest']
+        g = dgl.graph((src, dest), num_nodes=self.size)
         g.ndata['X'] = self.X
         g.ndata['isroot'] = self.isroot
         g.ndata['isleaf'] = self.isleaf
-        src, dest = self.edges['src'], self.edges['dest']
-        g.add_edges(src, dest)
 
         return g
     
-    def retrieve_data(self, leaf_ins=False, node_reor=False, emo_data=False):
+    def retrieve_data(self, target_var, leaf_ins=False, node_reor=False, emo_data=False):
         """
         retrieve dgl graph, label and root features from cascade data structure.
         If respective arg is set to True, perform data augmentation
+        TODO: adjust for multiple target variables
         """
         
         g = self.make_graph()
@@ -57,10 +55,10 @@ class Cascade:
         if node_reor:
             g = node_reordering(g)
             
-        if emo_data:
-            e = perturbate(e, emo_data[self.y.item()]['mean'], emo_data[self.y.item()]['cov'])
+        #if emo_data:
+        #    e = perturbate(e, emo_data[self.y.item()]['mean'], emo_data[self.y.item()]['cov'])
 
-        return (g, self.y, e)
+        return (g, self.target_vars[target_var], e)
     
 
 class CascadeData(Dataset):
@@ -70,7 +68,7 @@ class CascadeData(Dataset):
     one for trainin and one for validation or testing
     """
 
-    def __init__(self, list_IDs, sample=False, leaf_ins=False, node_reor=False, emo_pert=False, 
+    def __init__(self, list_IDs, target_var, data_dir, sample=False, leaf_ins=False, node_reor=False, emo_pert=False, 
                  variant='', structureless=False, test=False):
         """
         Initialize class.
@@ -89,12 +87,13 @@ class CascadeData(Dataset):
         self.variant = ['', '_' + variant][variant != '']
         self.structureless = ['', '_structureless'][structureless]
         self.test = ['', '_test'][test]
+        self.data_dir = data_dir
 
         'Initialization'
         if sample:
             list_IDs = self.sample(list_IDs)    
         if emo_pert:
-            self.emo_data = self.get_emo_data(data_file='../data/grouped' + self.variant + self.test + '.csv')
+            self.emo_data = self.get_emo_data(data_file=self.data_dir + 'grouped' + self.variant + self.test + '.csv')
         else:
             self.emo_data = False
 
@@ -103,6 +102,7 @@ class CascadeData(Dataset):
         self.list_IDs = list_IDs
         self.leaf_ins = leaf_ins
         self.node_reor = node_reor
+        self.target_var = target_var
 
     def __len__(self):
         # Denotes the total number of samples
@@ -116,7 +116,7 @@ class CascadeData(Dataset):
 
         # Load data and get label
 
-        g, v, emo = ld(ID + self.variant + self.structureless + self.test).retrieve_data(self.leaf_ins, self.node_reor, self.emo_data)
+        g, v, emo = ld(ID + self.variant + self.structureless + self.test, self.data_dir + 'graphs/').retrieve_data(self.target_var, self.leaf_ins, self.node_reor, self.emo_data)
 
         return th.Tensor([int(ID)]), g, v, emo
 
@@ -124,7 +124,7 @@ class CascadeData(Dataset):
         # sample ids
 
         # load cascade "embedding"
-        df = pd.read_csv('../data/grouped' + self.variant + '.csv')
+        df = pd.read_csv(self.data_dir + 'grouped' + self.variant + '.csv')
         # select embeddings of cascades to load with the dataloader
         df = df[df.cascade_id.isin(ids)].reset_index()
         # drop emotions

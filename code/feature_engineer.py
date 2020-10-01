@@ -83,6 +83,15 @@ df = pd.merge(df, df_meta, on='cascade_id')
 del df_meta
 del meta
 
+# root tweet exposure
+grpd = df.groupby('cascade_id')
+exposure = grpd.size().to_frame('cascade_size')
+exposure['cascade_followers'] = grpd['user_followers'].sum()
+
+df = pd.merge(df, exposure, on=['cascade_id'])
+del grpd
+del exposure
+
 
 df.sort_values(['cascade_id', 'tid'], inplace=True)
 df.to_csv(tweets_file, header=True, index=False)
