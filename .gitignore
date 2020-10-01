@@ -1,6 +1,7 @@
 data/
 .vscode/
 results/
+plots/
 __pycache__/
 node_modules/
 playground.ipynb
