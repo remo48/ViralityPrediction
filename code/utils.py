@@ -8,8 +8,101 @@ import dgl
 import matplotlib.pyplot as plt
 import networkx as nx
 from random import shuffle
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, mean_squared_error, mean_absolute_error
+from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, mean_squared_error, mean_absolute_error, accuracy_score
 from copy import deepcopy
+import time
+
+
+class Pbar:
+    '''
+    class to visualize training status
+    '''
+    def __init__(self, target, epoch, num_epochs ,width=40) -> None:
+        '''
+        Initialize class.
+        In :
+            - target: target value of Progress bar
+            - epoch: current epoch
+            - num_epochs: total number of epochs
+            - width: width of progress bar
+        '''
+        self.target = target
+        self.epoch = epoch
+        self.num_epochs = num_epochs
+        self.width = width
+
+        self._start = time.time()
+        self._seen_so_far = 0
+        self._metrics = {}
+
+        print(f'Epoch: {self.epoch+1}/{self.num_epochs}')
+
+    def __metrics_str(self, values):
+        values_str = ''
+        for name, value in values:
+            values_str += f'- {name}: {value:.4f} '
+        
+        return values_str
+
+    def update(self, step, values):
+        now = time.time()
+        left = (step+1) * self.width // self.target
+        right = self.width - left
+
+        finalize = (step+1) >= self.target
+
+        time_per_step = (now - self._start) / (step+1)
+        time_format = ''
+
+        if finalize:
+            if time_per_step >= 1 or time_per_step == 0:
+                time_per_step_format = ' %.0fs/step' % (time_per_step)
+            elif time_per_step >= 1e-3:
+                time_per_step_format = ' %.0fms/step' % (time_per_step * 1e3)
+            else:
+                time_per_step_format = ' %.0fus/step' % (time_per_step * 1e6)
+
+            elapsed = now - self._start
+            if elapsed > 3600:
+                time_format = '%d:%02d:%02d' % (elapsed // 3600,
+                                            (elapsed % 3600) // 60, elapsed % 60)
+            elif elapsed > 60:
+                time_format = '%d:%02d' % (elapsed // 60, elapsed % 60)
+            else:
+                time_format = '%ds' % elapsed
+
+            time_format += time_per_step_format 
+
+        else:
+            eta = (self.target - step) * time_per_step
+            if eta > 3600:
+                eta_format = '%d:%02d:%02d' % (eta // 3600,
+                                            (eta % 3600) // 60, eta % 60)
+            elif eta > 60:
+                eta_format = '%d:%02d' % (eta // 60, eta % 60)
+            else:
+                eta_format = '%ds' % eta
+
+            time_format = f'ETA: {eta_format}'
+        
+
+        metrics_str = ''
+        for k, v in values:
+            if k not in self._metrics:
+                self._metrics[k] = v
+            else:
+                self._metrics[k] += v
+
+            avg = self._metrics[k] / (step+1)
+            metrics_str += f'- {k}: {avg:.4f} '
+
+        print(f'\r{step+1}/{self.target} ',
+              '[', '#'*left, ' '*right, '] ',
+              f'- {time_format} ', 
+              metrics_str, sep='', end='', flush=True)
+
+    def add_val(self, values):
+        print(self.__metrics_str(values), end='\n')
 
 
 # load batch
@@ -62,29 +155,22 @@ def plot_tree(g, figsize=(8, 8), with_labels=False):
     plt.show()
 
 
-def set_device(_cuda, gpu_id):
-    # if _cuda, set device to gpu:gpu_id, else to cpu
+def set_device(cuda_id):
     device = 'cpu'
-    if _cuda and th.cuda.is_available() and int(gpu_id) < th.cuda.device_count():
-        device = 'cuda:' + gpu_id        
-    print(device)    
+    if cuda_id >= 0 and th.cuda.is_available() and int(cuda_id) < th.cuda.device_count():
+        device = 'cuda:' + cuda_id        
     return th.device(device)
 
 
-def calc_metrics(ys, y_hats, to_calc, device, criterion=False):
+def calc_metrics(y, y_hat, to_calc, device, criterion=None):
     """
     calculate metrics of cascade lstm
     """    
     metrics = {}    
     sig = nn.Sigmoid().to(device)
-    y = th.cat(ys, dim=0)
-    # y_hat : output of last layer without sigm
-    y_hat = th.cat(y_hats, dim=0)
-    # y_prob : prob of being positive in [0, 1]
     y_prob = sig(y_hat)
-    # y_pred : predicted label in {0, 1} i.e. only 0 or 1
     y_pred = th.round(y_prob).type(th.FloatTensor).to(device)
-
+    
     if 'loss' in to_calc and criterion:
         metrics['loss'] = criterion(y_hat, y).item()
     
@@ -160,7 +246,7 @@ def node_reordering(dg, iters=5):
     Note : CascadeLSTM needs the nodes pointing as re-tweet -> tweet
         so children are 'predecessors' and parent 'successor'
     """
-    
+    g = None
     if iters:
     
         g = dg.to_networkx(node_attrs=['X', 'isroot', 'isleaf'])
@@ -190,9 +276,7 @@ def node_reordering(dg, iters=5):
                 # connect children of focus node to parent
                 g.add_edges_from([(k, parent, {'id': k - 1}) for k in ks])
         
-        dg.from_networkx(g, node_attrs=['X', 'isroot', 'isleaf'])
-        
-    return dg
+    return dgl.from_networkx(g, node_attrs=['X', 'isroot', 'isleaf'])
 
 
 def leaf_insertion(dg, iters=5):

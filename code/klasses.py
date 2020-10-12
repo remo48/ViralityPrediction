@@ -1,5 +1,5 @@
 import torch as th
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 import dgl
 import pandas as pd
 import numpy as np
@@ -104,19 +104,25 @@ class CascadeData(Dataset):
         self.node_reor = node_reor
         self.target_var = target_var
 
+        IDs = [ID + self.variant + self.structureless + self.test for ID in self.list_IDs]
+        self.cascades = []
+
+        for ID in IDs:
+            self.cascades.append(ld(ID, self.data_dir + 'graphs/'))
+
+        self.x_size = self.cascades[0].X.shape[1]
+
     def __len__(self):
         # Denotes the total number of samples
         return len(self.list_IDs)
 
     def __getitem__(self, index):
         # Generates one sample of data
-
-        # Select sample
+        
         ID = self.list_IDs[index]
+        casc = self.cascades[index]
 
-        # Load data and get label
-
-        g, v, emo = ld(ID + self.variant + self.structureless + self.test, self.data_dir + 'graphs/').retrieve_data(self.target_var, self.leaf_ins, self.node_reor, self.emo_data)
+        g, v, emo = casc.retrieve_data(self.target_var, self.leaf_ins, self.node_reor, self.emo_data)
 
         return th.Tensor([int(ID)]), g, v, emo
 

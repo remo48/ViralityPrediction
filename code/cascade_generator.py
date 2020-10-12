@@ -209,7 +209,7 @@ graphs_dir = dest_dir + 'graphs/'
 tweets_file = source_dir + 'tweets.csv'
 emotions_file = source_dir + 'emotions.csv'
 
-print('delete graphs in graph directory')
+print('cleanup graph directory')
 for filename in os.listdir(graphs_dir):
     file_path = os.path.join(graphs_dir, filename)
     try:

@@ -1,6 +1,8 @@
 import torch as th
 import torch.nn as nn
 import dgl
+from utils import *
+import math
 
 
 class ChildSumTreeLSTMCell(nn.Module):
@@ -32,8 +34,7 @@ class ChildSumTreeLSTMCell(nn.Module):
 class TreeLSTM(nn.Module):
     def __init__(self,
                  x_size,
-                 h_size,
-                 num_classes):
+                 h_size):
         super(TreeLSTM, self).__init__()
         self.x_size = x_size
         self.cell = ChildSumTreeLSTMCell(x_size, h_size)
@@ -80,8 +81,7 @@ class TreeLSTM(nn.Module):
 class BiDiTreeLSTM(nn.Module):
     def __init__(self,
                  x_size,
-                 h_size,
-                 num_classes):
+                 h_size):
         super(BiDiTreeLSTM, self).__init__()
         self.x_size = x_size
         self.cell_bottom_up = ChildSumTreeLSTMCell(x_size, h_size)
@@ -139,23 +139,42 @@ class BiDiTreeLSTM(nn.Module):
         return out
 
 class DeepTreeLSTM(nn.Module):
-    def __init__(self, x_size, h_size, num_classes, emo_size, top_sizes, pd, bi, deep):
+    '''
+    Base Class for CascadeLSTM Regressor & Classifier
+    '''
+    def __init__(self, x_size, h_size, bi, deep):
+        self.h_size = h_size
         
         super(DeepTreeLSTM, self).__init__()
         
         if bi :
-            net = BiDiTreeLSTM(x_size, h_size, num_classes)
+            net = BiDiTreeLSTM(x_size, h_size)
         else :
-            net = TreeLSTM(x_size, h_size, num_classes)
+            net = TreeLSTM(x_size, h_size)
             
             
         self.deep = deep    
         self.bottom_net = net
+        self.top_net = None
+
         
+    def forward(self, batch, g, h, c):
+        h_top = self.bottom_net.forward(batch, g, h, c)
+        if self.deep:
+            X2 = th.cat([h_top, batch.emo], dim = 1)
+        else:
+            X2 = h_top
+        out = self.top_net(X2)
+        return out
+
+
+class DeepTreeLSTMRegressor(DeepTreeLSTM):
+    def __init__(self, x_size, h_size, emo_size, top_sizes, pd, bi, deep):
+        super().__init__(x_size, h_size, bi, deep)
 
         net = nn.Sequential()
         
-        if deep:
+        if self.deep:
         
             net.add_module('d_in', nn.Dropout(p=pd))
             net.add_module('l_in', nn.Linear(2*h_size+emo_size, top_sizes[0]))
@@ -167,7 +186,35 @@ class DeepTreeLSTM(nn.Module):
                 net.add_module('tf' + str(i), nn.ReLU())
 
             net.add_module('d_out', nn.Dropout(p=pd))
-            net.add_module('l_out', nn.Linear(top_sizes[-1],num_classes))
+            net.add_module('l_out', nn.Linear(top_sizes[-1],1))
+
+        else:
+            net.add_module('d', nn.Dropout(p=pd))
+            net.add_module('l', nn.Linear(2*h_size, 1))
+
+        self.top_net = net
+
+class DeepTreeLSTMClassifier(DeepTreeLSTM):
+    def __init__(self, x_size, h_size, num_classes, emo_size, top_sizes, pd, bi, deep, logit=True):
+        super().__init__(x_size, h_size, bi, deep)
+
+        net = nn.Sequential()
+        
+        if self.deep:
+        
+            net.add_module('d_in', nn.Dropout(p=pd))
+            net.add_module('l_in', nn.Linear(2*h_size+emo_size, top_sizes[0]))
+            net.add_module('tf_in', nn.ReLU())
+
+            for i, (in_dim, out_dim) in enumerate(zip(top_sizes[:-1], top_sizes[1:])):
+                net.add_module('d' + str(i), nn.Dropout(p=pd))
+                net.add_module('l' + str(i), nn.Linear(in_dim, out_dim))
+                net.add_module('tf' + str(i), nn.ReLU())
+
+            net.add_module('d_out', nn.Dropout(p=pd))
+            net.add_module('l_out', nn.Linear(top_sizes[-1], num_classes))
+            if logit:
+                net.add_module('tf_out', nn.Sigmoid())
 
         else:
             net.add_module('d', nn.Dropout(p=pd))
@@ -175,16 +222,106 @@ class DeepTreeLSTM(nn.Module):
 
         self.top_net = net
 
+
+class DeepTreeTrainer:
+    '''
+    class for high level training of DeepTreeLSTM models
+    '''
+    def __init__(self, model):
+        if not isinstance(model, DeepTreeLSTM):
+            raise ValueError('model argument must inherit from DeepTreeLSTM')
         
-    def forward(self, batch, g, h, c):
-        # output of TreeLSTM
-        h_top = self.bottom_net.forward(batch, g, h, c)
-        # concatenate emotions w. output of TreeLSTM
-        if self.deep:
-            X2 = th.cat([h_top, batch.emo], dim = 1)
-        else:
-            X2 = h_top
-        out = self.top_net(X2)
-        return out
+        self.model = model
+        init_net(self.model)
+        
+        self.h_size = model.h_size
+        self._has_Scheduler_tree = False
+        self._has_Scheduler_top = False
+        
+
+
+    def compile(self, optimizer_tree, optimizer_top, criterion, scheduler_tree=None, scheduler_top=None, metrics=None):
+
+        self._criterion = criterion
+        self._optimizer_tree = optimizer_tree
+        self._optimizer_top = optimizer_top
+
+        if scheduler_tree is not None:
+            self.scheduler_tree = scheduler_tree
+            self._has_Scheduler_tree = True
+
+        if scheduler_top is not None:
+            self.scheduler_top = scheduler_top
+            self._has_Scheduler_top = True
+
+
+    def fit(self, loader, val_loader=None, num_epoch=50, cuda_device=-1, verbose=1):
+
+        self.model.train(mode=True)
+
+        device = set_device(cuda_device)
+
+        len_inputs = len(loader.sampler) if loader.sampler else len(loader.dataset)
+        batch_size = loader.batch_size
+
+        num_batches = int(math.ceil(len_inputs / batch_size))
+
+
+        for epoch in range(num_epoch):
+            pbar = Pbar(num_batches, epoch, num_epoch)
+
             
+            for step, batch in enumerate(loader):
+
+                self._optimizer_top.zero_grad()
+                self._optimizer_tree.zero_grad()
+                y, y_hat = self.__learn(batch, device)
+                loss = self._criterion(y, y_hat)
+                loss.backward()
+                self._optimizer_top.step()
+                self._optimizer_tree.step()
+
+                pbar.update(step, [('loss', loss.item())])
+
+            if self._has_Scheduler_tree:
+                self.scheduler_tree.step()
+
+            if self._has_Scheduler_top:
+                self.scheduler_top.step()
+
+            if val_loader is not None:
+                loss = self.evaluate(val_loader, cuda_device, verbose)
+
+                pbar.add_val([('val_loss', loss.item())])
+
+        self.model.train(mode=False)
+
+
+    def evaluate(self, loader, cuda_device=-1, verbose=1):
+        self.model.train(mode=False)
+
+        loss = None
+        device = set_device(cuda_device)
+
+        for batch in loader:
+            self._optimizer_tree.zero_grad()
+            self._optimizer_top.zero_grad()
+            y, y_hat = self.__learn(batch, device)
+            loss = self._criterion(y, y_hat)
+
+        self.model.train(mode=True)
+
+        return loss
         
+
+    def predict(self):
+        pass
+
+
+    def __learn(self, batch, device):
+        g = batch.graph.to(device)
+        n = g.number_of_nodes()
+        h = th.zeros((n, self.h_size)).to(device)
+        c = th.zeros((n, self.h_size)).to(device)
+        y_hat = self.model(batch, g, h, c)
+        return batch.y.to(device), y_hat
