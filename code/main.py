@@ -12,8 +12,7 @@ from torch.utils.data import DataLoader
 import argparse
 from datetime import datetime
 from utils import *
-from klasses import CascadeData
-from CascadeLSTM import DeepTreeTrainer, DeepTreeLSTMClassifier, DeepTreeLSTMRegressor
+from CascadeLSTM import DeepTreeTrainer, DeepTreeLSTMClassifier, DeepTreeLSTMRegressor, CascadeData
 
 def main(args):
     cuda_id = args.cuda_id
