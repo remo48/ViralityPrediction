@@ -15,7 +15,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 
 sys.path.append('../code/')
-from CascadeLSTM import Cascade
+from dataset import Cascade
 
 source_dir = '../data/'
 dest_dir = '../data/'
@@ -494,6 +494,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--data_dir', dest = 'data_dir', default = '../data/', type = str)
     parser.add_argument('--verbose', dest='verbose', default=1, type=int)
+    parser.add_argument('--feature_engineer', action='store_true', default=False, dest='feature_engineer')
 
     args = parser.parse_args()
 
@@ -501,7 +502,8 @@ if __name__ == "__main__":
     raw_emotions_file = args.data_dir + 'emotions_anon.csv'
     raw_metadata_file = args.data_dir + 'metadata_anon.txt'
 
-    #feature_engineer(raw_data_file, raw_emotions_file, raw_metadata_file, args.verbose)
+    if args.feature_engineer:
+        feature_engineer(raw_data_file, raw_emotions_file, raw_metadata_file, args.verbose)
 
     cascade_generator()
 
