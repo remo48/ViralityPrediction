@@ -2,18 +2,16 @@ import datetime
 import time
 import sys
 import os
-
-def _get_current_time():
-    return datetime.datetime.now().strftime("%B %d, %Y - %I:%M%p")
+import csv
+import torch as th
 
 class CallbackContainer():
     """
     Container holding a list of callbacks.
     """
-    def __init__(self, callbacks=None, queue_length=10):
+    def __init__(self, callbacks=None):
         callbacks = callbacks or []
         self.callbacks = [c for c in callbacks]
-        self.queue_length = queue_length
 
     def append(self, callback):
         self.callbacks.append(callback)
@@ -49,15 +47,13 @@ class CallbackContainer():
 
     def on_train_begin(self, logs=None):
         logs = logs or {}
-        logs['start_time'] = _get_current_time()
+        experiment_id = datetime.datetime.now().strftime("%m_%d_%Y__%H_%M_%S__%f")
+        logs['id'] = experiment_id
         for callback in self.callbacks:
             callback.on_train_begin(logs)
 
     def on_train_end(self, logs=None):
         logs = logs or {}
-        #logs['final_loss'] = self.trainer.history.epoch_losses[-1],
-        #logs['best_loss'] = min(self.trainer.history.epoch_losses),
-        logs['stop_time'] = _get_current_time()
         for callback in self.callbacks:
             callback.on_train_end(logs)
 
@@ -97,9 +93,6 @@ class History(callback):
     """
     Callback that records loss and metrics history into a `History` object.
     """
-    def __init__(self, model):
-        self.trainer = model
-
     def on_train_begin(self, logs=None):
         self.epoch_metrics = {}
 
@@ -120,11 +113,21 @@ class History(callback):
         return str(self.epoch_metrics)
 
 class Printer(callback):
+    '''
+    Callback class to pretty print the training status
 
+    Args:
+        metrics: array of metrics to show
+        width: width of progress bar
+        verbose: verbosity of output (1=all information, 0=no output)
+    '''
     def __init__(self, metrics, width=40, verbose=1):
         self.width = width
         self.verbose = verbose
-        self.metrics = metrics
+
+        self.metrics = ['loss']
+        if metrics is not None:
+            self.metrics += metrics
 
     def on_train_begin(self, logs):
         self.num_epoch = logs['num_epoch']
@@ -210,11 +213,15 @@ class Printer(callback):
         sys.stdout.write(info)
         sys.stdout.flush()
 
+
 class EarlyStopping(callback):
     '''
-        Callback class for early stopping
+    Callback class for early stopping
 
-        TODO: not working yet
+    Args:
+        monitor: Metric that is monitored for early stopping
+        min_delta: Minimum training improvement to reset early stopping
+        patience: Number of epochs without improvement before the training stops
     '''
     def __init__(self, monitor='val_loss', min_delta=0, patience=10):
         self.monitor = monitor
@@ -237,12 +244,80 @@ class EarlyStopping(callback):
                 self.trainer._stop_training = True
             self.wait += 1
 
-class ExperimentLogger(callback):
 
-    def __init__(self, directory, filename='logs_final.csv', settings=None):
+class ExperimentLogger(callback):
+    '''
+    Callback class to log experiment settings and results into .csv file
+
+    Args:
+        directory: Directory where the log file is stored
+        filename: Name of log file
+    '''
+    def __init__(self, directory, filename='logs_final.csv'):
         self.directory = directory
         self.filename = filename
         self.file = os.path.join(self.directory, self.filename)
+        self.best_epoch = 0
+        self.best = 1e15
 
-        if settings is not None:
-            self.settings = settings
+        self.new_file = True
+        if os.path.exists(self.file):
+            self.new_file = False
+
+    def on_epoch_end(self, epoch, logs):
+        current = logs['val_loss']
+
+        if current < self.best:
+            self.best = current
+            self.best_epoch = epoch
+
+    def on_train_begin(self, logs):
+        self.train_log = logs
+
+    def on_train_end(self, logs):
+        epoch_metrics = self.trainer.history.epoch_metrics
+        best_metrics = {'best_epoch': self.best_epoch+1}
+
+        for k, v in epoch_metrics.items():
+            best_metrics[k] = v[self.best_epoch]
+
+        self.train_log.update(best_metrics)
+        fieldnames = self.train_log.keys()
+
+        if self.new_file:
+            with open(self.file, 'w') as f:
+                writer = csv.DictWriter(f, fieldnames)
+                writer.writeheader()
+                writer.writerow(self.train_log)
+
+        else:
+            with open(self.file, 'a') as f:
+                writer = csv.DictWriter(f, fieldnames)
+                writer.writerow(self.train_log)
+
+
+class ModelLogger(callback):
+    '''
+        Callback class to log models during training
+        TODO: stores the models state_dict, but loading it produces not the expected result 
+
+        Args:
+            directory: directory where the model file is stored
+            monitor: variable that is monitored to decide if model is stored
+    '''
+    def __init__(self, directory, monitor='val_loss'):
+        self.directory = directory
+        self.best = 1e15
+        self.monitor = monitor
+
+    def on_train_begin(self, logs):
+        self.id = logs['id']
+
+    def on_epoch_end(self, epoch, logs):
+        current = logs[self.monitor]
+
+        if current < self.best:
+            self.best = current
+            model_path = os.path.join(self.directory, 'model_'+self.id+'.pt')
+            th.save(self.trainer.model.state_dict(), model_path)
+

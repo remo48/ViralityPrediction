@@ -140,13 +140,26 @@ class DeepTreeLSTM(nn.Module):
     '''
     Base Class for CascadeLSTM Regressor & Classifier
     '''
-    def __init__(self, x_size, emo_size, settings):
-        self.h_size = settings.get('h_size')
-        self.bi = settings.get('bi')
-        self.deep = settings.get('deep')
-        self.top_sizes = settings.get('top_sizes')
-        self.pd = settings.get('p_drop')
+    def __init__(self, x_size,
+                h_size = 16,
+                bi = True,
+                deep = True,
+                top_sizes = (32, 32),
+                pd = 0.1):
+        
+        self.h_size = h_size
+        self.bi = bi
+        self.deep = deep
+        self.top_sizes = top_sizes
+        self.pd = pd
 
+        self.log = {
+            'h_size': self.h_size,
+            'bi': self.bi,
+            'deep': self.deep,
+            'top_sizes': self.top_sizes,
+            'p_drop': self.pd
+        }
         
         super(DeepTreeLSTM, self).__init__()
         
@@ -172,8 +185,8 @@ class DeepTreeLSTM(nn.Module):
 
 
 class DeepTreeLSTMRegressor(DeepTreeLSTM):
-    def __init__(self, x_size, emo_size, settings):
-        super().__init__(x_size, emo_size, settings)
+    def __init__(self, x_size, emo_size, **kwargs):        
+        super().__init__(x_size, **kwargs)
 
         net = nn.Sequential()
         
@@ -197,9 +210,12 @@ class DeepTreeLSTMRegressor(DeepTreeLSTM):
 
         self.top_net = net
 
+    def predict(self, batch, g, h ,c):
+        return self.forward(batch, g, h, c)
+
 class DeepTreeLSTMClassifier(DeepTreeLSTM):
-    def __init__(self, x_size, num_classes, emo_size, settings, logit=True):
-        super().__init__(x_size, emo_size, settings)
+    def __init__(self, x_size, num_classes, emo_size, **kwargs):
+        super().__init__(x_size, **kwargs)
 
         net = nn.Sequential()
         
@@ -216,11 +232,15 @@ class DeepTreeLSTMClassifier(DeepTreeLSTM):
 
             net.add_module('d_out', nn.Dropout(p=self.pd))
             net.add_module('l_out', nn.Linear(self.top_sizes[-1], num_classes))
-            if logit:
-                net.add_module('tf_out', nn.Sigmoid())
+            net.add_module('tf_out', nn.Sigmoid())
 
         else:
             net.add_module('d', nn.Dropout(p=self.pd))
             net.add_module('l', nn.Linear(2*self.h_size, num_classes))
 
         self.top_net = net
+
+    def predict(self, batch, g ,h, c):
+        out = self.forward(batch, g, h, c)
+        sig = nn.Sigmoid()
+        return sig(out)

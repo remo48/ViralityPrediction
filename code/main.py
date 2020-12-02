@@ -1,6 +1,6 @@
 import os, sys
 
-from callbacks import EarlyStopping, ExperimentLogger
+from callbacks import EarlyStopping, ExperimentLogger, ModelLogger
 
 try : os.chdir(os.path.dirname(sys.argv[0]))
 except : pass
@@ -18,11 +18,6 @@ from model import DeepTreeLSTMClassifier, DeepTreeLSTMRegressor
 from dataset import CascadeData
 from trainer import DeepTreeTrainer
 
-default_settings = {
-    'h_size': 24,
-    'top_sizes': (32,64,32)
-}
-
 def main(args):
 
     verb = args.verbose
@@ -37,31 +32,16 @@ def main(args):
         
     device = set_device(cuda_id)
 
-    settings = {
-        'h_size': args.h_size,
-        'top_sizes': (32, 64, 32),
-        'p_drop': args.p_drop,
-        'lr_tree': args.lr_tree,
-        'decay_tree': args.decay_tree,
-        'lr_top': args.lr_top,
-        'decay_top': args.decay_top,
-        'bi': bool(args.bi),
-        'deep': bool(args.deep),
-        'lead_ins': args.leaf_ins,
-        'node_reor': args.node_reor,
-        'variant': args.variant,
-        'structureless': args.structureless
-    }
-
     train_ids = np.array([ID.split('.')[0] for ID in os.listdir(graphs_dir) if '_' not in ID])
     test_ids = np.unique([ID.split('_')[0] for ID in os.listdir(graphs_dir) if 'test' in ID])
 
-    train_set = CascadeData(train_ids, 'cascade_size_log', data_dir, settings)
-    test_set = CascadeData(test_ids, 'cascade_size_log', data_dir, settings, test = True)
+    train_set = CascadeData(train_ids, data_dir, variant=args.variant)
+    test_set = CascadeData(test_ids, data_dir, variant=args.variant, test=True)
 
     train_generator = DataLoader(train_set, collate_fn=cascade_batcher(device), batch_size= args.batch_size, num_workers=8)
     test_generator = DataLoader(test_set, collate_fn=cascade_batcher(device), batch_size= args.batch_size, num_workers=8)
 
+    # r_train = class_ratio(train_generator)
 
     x_size = args.x_size
     if args.structureless: 
@@ -69,28 +49,36 @@ def main(args):
     emo_size = 8
     epochs = args.epochs
 
-    deep_tree = DeepTreeLSTMRegressor(x_size, emo_size, settings)
+    deep_tree = DeepTreeLSTMRegressor(x_size, emo_size, h_size=args.h_size, top_sizes=(16,16), bi=args.bi)
 
     criterion = nn.MSELoss().to(device)
-    optimizer_tree = optim.SGD(deep_tree.bottom_net.parameters(), lr = settings['lr_tree'], weight_decay = settings['decay_tree'])
-    optimizer_top = optim.SGD(deep_tree.top_net.parameters(), lr = settings['lr_top'], weight_decay = settings['decay_top'])
+    optimizer_tree = optim.SGD(deep_tree.bottom_net.parameters(), lr = args.lr_tree, weight_decay = args.decay_tree)
+    optimizer_top = optim.SGD(deep_tree.top_net.parameters(), lr = args.lr_top, weight_decay = args.decay_top)
     scheduler_tree = optim.lr_scheduler.StepLR(optimizer_tree, step_size=10, gamma=0.8)
     scheduler_top = optim.lr_scheduler.StepLR(optimizer_top, step_size=10, gamma=0.8)
 
 
-    callbacks = [EarlyStopping(patience=1),
-                 ExperimentLogger(out_dir, settings=settings)]
+    callbacks = [EarlyStopping(patience=10), ModelLogger(out_dir+'models/'), ExperimentLogger(out_dir, 'logs_new.csv')]
 
     model_trainer = DeepTreeTrainer(deep_tree)
     model_trainer.compile(optimizer_tree, optimizer_top, criterion, scheduler_tree=scheduler_tree, scheduler_top=scheduler_top, callbacks=callbacks, metrics=['mae'])
     model_trainer.fit(train_generator, test_generator, epochs, cuda_id)
+    
+    # ys = []
+    # for batch in test_generator:
+    #     ys.append(batch.y)
+
+    # y = th.cat(ys, dim=0).flatten().tolist()
+    # y_pred = model_trainer.predict(test_generator).round().flatten().tolist()
+    # df_res = pd.DataFrame({'id': test_ids, 'y_true' : y, 'y_pred' : y_pred})
+    # df_res.to_csv('../results/preds.csv', index=False, header=True)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--x_size', dest = 'x_size', default = 12, type = int)
-    parser.add_argument('--h_size', dest = 'h_size', default = 24, type = int)
+    parser.add_argument('--h_size', dest = 'h_size', default = 3, type = int)
     parser.add_argument('--sample', dest = 'sample', action='store_true')
     parser.add_argument('--bsize', dest = 'batch_size', default = 25, type = int)
     parser.add_argument('--pd', dest = 'p_drop', default = 0.1, type = float)

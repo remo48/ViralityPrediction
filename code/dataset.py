@@ -12,13 +12,13 @@ class Cascade:
     class that contains a single cascade. The cascade data structure
     is save and then loaded in ".pt" ~ pytorch format.
     """
-    def __init__(self, cascade_id, X, target_vars, emo, src, dest, isleaf):
+    def __init__(self, cascade_id, X, cascade_size, emo, src, dest, isleaf):
         # init the cascade data structure with data
 
         self.cascade_id = cascade_id
         # node covariates
         self.X = X
-        self.target_vars = target_vars
+        self.cascade_size = cascade_size
         self.size = X.shape[0]
         self.isleaf = isleaf
         self.isroot = th.cat([th.Tensor([1]), th.zeros(self.size - 1)])
@@ -39,7 +39,7 @@ class Cascade:
 
         return g
     
-    def retrieve_data(self, target_var, leaf_ins=False, node_reor=False, emo_data=False):
+    def retrieve_data(self, leaf_ins=False, node_reor=False, emo_data=False):
         """
         retrieve dgl graph, label and root features from cascade data structure.
         If respective arg is set to True, perform data augmentation
@@ -57,7 +57,7 @@ class Cascade:
         #if emo_data:
         #    e = perturbate(e, emo_data[self.y.item()]['mean'], emo_data[self.y.item()]['cov'])
 
-        return (g, self.target_vars[target_var], e)
+        return (g, self.cascade_size, e)
     
 
 class CascadeData(Dataset):
@@ -67,7 +67,14 @@ class CascadeData(Dataset):
     one for trainin and one for validation or testing
     """
 
-    def __init__(self, list_IDs, target_var, data_dir, settings=None, test=False):
+    def __init__(self, list_IDs, data_dir, 
+                variant='',
+                structureless = False,
+                sample = False,
+                emo_pert = False,
+                leaf_ins = False,
+                node_reor = False,
+                test=False):
         """
         Initialize class.
         In :
@@ -80,10 +87,18 @@ class CascadeData(Dataset):
             and (log of) number of children  
             - test: load test (rather than train) data
         """
-        variant = settings.get('variant', '')
-        structureless = settings.get('structureless', False)
-        sample = settings.get('sample', False)
-        emo_pert = settings.get('emo_pert', False)
+
+        self.leaf_ins = leaf_ins
+        self.node_reor = node_reor
+
+        self.log = {
+            'variant': variant,
+            'structureless': structureless,
+            'sample': sample,
+            'emo_pert': emo_pert,
+            'leaf_ins': self.leaf_ins,
+            'node_reor': self.node_reor
+        }
 
         # prepend underscore to variant to load cascade with name ID_variant
         self.variant = ['', '_' + variant][variant != '']
@@ -102,9 +117,6 @@ class CascadeData(Dataset):
         shuffle(list_IDs)
 
         self.list_IDs = list_IDs
-        self.leaf_ins = settings.get('leaf_ins', False)
-        self.node_reor = settings.get('node_reor', False)
-        self.target_var = target_var
 
         IDs = [ID + self.variant + self.structureless + self.test for ID in self.list_IDs]
 
@@ -115,7 +127,7 @@ class CascadeData(Dataset):
 
         self.cascades_proc = []
         for c in self.cascades:
-            self.cascades_proc.append(c.retrieve_data(self.target_var, self.leaf_ins, self.node_reor, self.emo_data))
+            self.cascades_proc.append(c.retrieve_data(self.leaf_ins, self.node_reor, self.emo_data))
 
         del self.cascades
         
