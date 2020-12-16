@@ -1,3 +1,5 @@
+from operator import index
+from networkx.algorithms.centrality import group
 import numpy as np
 import pandas as pd
 import datetime
@@ -14,18 +16,15 @@ from itertools import chain
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 
-sys.path.append('../code/')
 from dataset import Cascade
-
-try: os.chdir(os.path.dirname(sys.argv[0]))
-except: pass
+from utils import Logger
 
 def logp(x):
     return np.log(x+1)
 
-class Preprocessing:
+class Preprocessor:
 
-    def __init__(self, data_dir, raw_data_file='raw_data_anon.csv', raw_emotions_file='emotions_anon.csv', verbose=1):
+    def __init__(self, data_dir, verbose=1):
         '''
         Preprocessing the raw data into experiment data
 
@@ -39,23 +38,8 @@ class Preprocessing:
         self.data_dir = data_dir
         self.graphs_dir = os.path.join(self.data_dir, 'graphs/')
         self.grouped_dir = os.path.join(self.data_dir, 'grouped/')
-        self.raw_data_file = os.path.join(self.data_dir, raw_data_file)
-        self.raw_emotions_file = os.path.join(self.data_dir, raw_emotions_file)
-        
-        self.tweets_file = os.path.join(self.data_dir, 'tweets.csv')
-        self.emo_file = os.path.join(self.data_dir, 'emotions.csv')
-        self.tweets_train_file = os.path.join(self.data_dir, 'tweets_train.csv')
-        self.tweets_test_file = os.path.join(self.data_dir, 'tweets_test.csv')
-        self.emo_train_file = os.path.join(self.data_dir, 'emo_train.csv')
-        self.emo_test_file = os.path.join(self.data_dir, 'emo_test.csv')
-        self.tweets = None
-        self.emo = None
-        self.tweets_train = None
-        self.tweets_test = None
-        self.emo_train = None
-        self.emo_test = None
 
-        self.verbose = verbose
+        self.logger = Logger(verbose)
 
         self.to_encode = ['user_followers_log',
                     'user_followees_log',
@@ -81,24 +65,28 @@ class Preprocessing:
                                 'wd_cos',
                                 'wd_sin']
 
-        self.to_group = ['user_followers_log',
-                    'user_followees_log',
-                    'user_account_age_log',
-                    'user_engagement_log',
-                    'retweet_delay_log']
+        self.to_group = {'user_followers_log' : 'mean',
+                    'user_followees_log' : 'mean',
+                    'user_account_age_log' : 'mean',
+                    'user_engagement_log': 'mean',
+                    'retweet_delay_log' : 'mean',
+                    'n_children_log': 'max',
+                    'depth' : 'max'}
 
         self.to_standardize = ['user_followers_log', 
                         'user_followees_log',
                         'user_engagement_log', 
                         'user_account_age_log',
                         'retweet_delay_log',
-                        'depth']
+                        'depth',
+                        'n_children_log']
 
 
-    def feature_engineer(self):
+    def __load_data(self, raw_data_file='raw_data_anon.csv', raw_emotions_file='emotions_anon.csv', lower_threshold=100, upper_threshold=10000):
         '''
-        This function processes the raw data files and loads it into memory
+        This function loads the raw data in the Preprocessor
         '''
+
         dtypes = {
             'tid' : int,
             'veracity' : object,
@@ -115,365 +103,286 @@ class Preprocessing:
             'cascade_root_tid' : int,
             'was_retweeted' : int
         }
+        raw_data_file = os.path.join(self.data_dir, raw_data_file)
+        raw_emotions_file = os.path.join(self.data_dir, raw_emotions_file)
 
-        print("Start preprocessing the raw data ")
-        print("Load data... ", end='', flush=True)
-        df = pd.read_csv(self.raw_data_file, dtype=dtypes, na_values='None')
-        df = df.drop(['rumor_id', 'rumor_category', 'veracity'], axis=1)
+        self.logger.step_start('Load data...')
+        df = pd.read_csv(raw_data_file, dtype=dtypes, na_values='None')
+        self.logger.step_end('{} tweets loaded'.format(df.shape[0]))
 
+        df['datetime'] = pd.to_datetime(df['tweet_date'], format='%Y-%m-%d %H:%M:%S')
+        df = df.drop(['rumor_id', 'rumor_category', 'veracity', 'tweet_date'], axis=1)
+
+        self.logger.step_start('Drop cascades not in threshold...')
+        df_cascade_size = df['cascade_id'].value_counts().reset_index()
+        df_cascade_size.columns = ['cascade_id', 'cascade_size']
+
+        df = pd.merge(df, df_cascade_size, on='cascade_id')
+        df = df[(df.cascade_size >= int(lower_threshold)) & (df.cascade_size <= int(upper_threshold))].reset_index(drop=True)
+        self.logger.step_end('{} tweets after filtering'.format(df.shape[0]))
+
+        self.logger.step_start('Load emotions data...')
+        df_emo = pd.read_csv(raw_emotions_file)
+        ids = df[['tid', 'cascade_id']]
+        df_emo = pd.merge(ids, df_emo.drop('misc', axis=1), left_on='tid', right_on='tweet_id')
+        df_emo = df_emo.drop(['tid', 'tweet_id'], axis=1)
+        self.logger.step_end()
+
+        self.logger.step_start('Drop cascades without emotion data...')
+        df = df[df.cascade_id.isin(df_emo.cascade_id)]
+        self.logger.step_end('{} tweets after dropping'.format(df.shape[0]))
+
+        return df, df_emo, df_cascade_size
+
+    def __categorize_cascade_size(self, df_cascade_size):
+        return df_cascade_size
+
+    def __impute_data(self, df):
+        self.logger.step_start('Impute missing user data...')
         df['user_verified'] = df.user_verified.fillna(False).astype(bool).astype(int)
+        
+        si = SimpleImputer(strategy='median')
+        df[['user_followers', 'user_followees', 'user_account_age']] = si.fit_transform(df[['user_followers', 'user_followees', 'user_account_age']].values)
+        self.logger.step_end()
 
-        df['datetime'] = [datetime.datetime.strptime(s, '%Y-%m-%d %H:%M:%S') for s in df.tweet_date]
-        print(df.shape[0], 'tweets loaded')
+        return df
 
-        print("Computing root and retweet delay... ", end='', flush=True)
+    def __compute_delay(self, df):
+        self.logger.step_start('Compute retweet delay...')
         parents = df.loc[df.was_retweeted == 1, ['tid', 'datetime']]
         parents.columns = ['parent_' + c for c in parents.columns]
         df = pd.merge(df, parents, how='left', on=['parent_tid'])
-        df['retweet_delay'] = [self.__timediff(time, parent_time) for time, parent_time in zip(df.datetime, df.parent_datetime)]
+        df['retweet_delay'] = (df['datetime'] - df['parent_datetime']).dt.total_seconds().fillna(0).astype(int)
         del parents
+        self.logger.step_end()
 
+        self.logger.step_start('Compute root delay...')
         roots = df.loc[df.parent_tid == -1, ['cascade_id', 'datetime']]
         roots.rename(columns={'datetime': 'root_datetime'}, inplace=True)
         df = pd.merge(df, roots, on='cascade_id')
-        df['root_delay'] = [self.__timediff(time, root_time) for time, root_time in zip(df.datetime, df.root_datetime)]
+        df['root_delay'] = (df['datetime'] - df['root_datetime']).dt.total_seconds().fillna(0).astype(int)
         del roots
-        print('done')
+        self.logger.step_end()
+        df = df.drop(['parent_datetime', 'root_datetime'], axis=1)
 
-        df = df.drop(['parent_datetime', 'root_datetime', 'was_retweeted', 'tweet_date'], axis=1)
+        return df
 
-        print("Encode tweet date... ", end='', flush=True)
-        # hour; cyclic encoding
+    def __encode_tweet_date(self, df):
+        self.logger.step_start('Encode tweet hour...')
         h = np.array([dt.hour for dt in df['datetime']])
         df['hour_cos'] = np.cos(2 * np.pi * h / 23.0)
         df['hour_sin'] = np.sin(2 * np.pi * h / 23.0)
         del h
+        self.logger.step_end()
 
-        # weekday; cyclic encoding
+        self.logger.step_start('Encode tweet weekday...')
         weekday = np.array([dt.weekday() for dt in df['datetime']])
         df['wd_cos'] = np.cos(2 * np.pi * weekday / 6.0)
         df['wd_sin'] = np.sin(2 * np.pi * weekday / 6.0)
         del weekday
-        print('done')
+        self.logger.step_end()
 
-        print("Add cascade size... ", end='', flush=True)
-        grpd = df.groupby('cascade_id')
-        exposure = grpd.size().to_frame('cascade_size')
-        df = pd.merge(df, exposure, on=['cascade_id'])
-        del grpd
-        del exposure
-        print("done")
+        return df
 
-        df.sort_values(['cascade_id', 'tid'], inplace=True)
+    def __compute_new_tid(self, df):
+        self.logger.step_start('Compute new tid...')
+        df = df.sort_values(by=['cascade_id', 'root_delay'])
+        df['new_tid'] = df.groupby('cascade_id').cumcount()
 
-        print("Load emotion data... ", end='', flush=True)
-        df_emo = pd.read_csv(raw_emotions_file)
+        parents = df.loc[df.was_retweeted == 1, ['tid', 'new_tid']]
+        parents.columns = ['parent_tid', 'new_parent_tid']
+        df = pd.merge(df, parents, on=['parent_tid'], how='left')
+        df['new_parent_tid'] = df['new_parent_tid'].fillna(-1)
+        self.logger.step_end()
 
-        ids = df[['tid', 'cascade_id']]
-        df_emo = pd.merge(ids, df_emo.drop('misc', axis=1), left_on='tid', right_on='tweet_id')
-        df_emo = df_emo.drop(['tid', 'tweet_id'], axis=1)
-        print("done")
+        return df
 
-        print("Impute missing user data... ", end='', flush=True)
-        si = SimpleImputer(strategy='median')
-        df[['user_followers', 'user_followees', 'user_account_age']] = si.fit_transform(df[['user_followers', 'user_followees', 'user_account_age']].values)
+    def __compute_depth(self, df):
+        self.logger.step_start('Compute depth...')
+        df = df.sort_values(by=['cascade_id', 'new_tid'])
+        all_depths = []
 
-        self.tweets = df
-        self.emo = df_emo
-        print("done")
-        
-        print("Saving dataframes to directory... ", end='', flush=True)
-        self.tweets.to_csv(self.tweets_file, header=True, index=False)
-        self.emo.to_csv(self.emo_file, header=True, index=False)
-        print("done")
+        for cid in df.cascade_id.unique():
+            cascade = df[df['cascade_id'] == cid]
+            g = nx.DiGraph()
+            g.add_nodes_from(cascade.new_tid.values)
+            g.add_edges_from([(u, v) for u, v in zip(cascade.new_parent_tid, cascade.new_tid)][1:])
+            depths = nx.single_source_shortest_path_length(g, 0)
+            all_depths += [v for _,v in sorted(depths.items())]
 
+        df['depth'] = all_depths
+        self.logger.step_end()
+        return df
 
-    def generate_experiment_data(self, split_ratio=0.85, lower_threshold=100, upper_threshold=10000):
-        print("Start generating experiment data...")
-        ss = StandardScaler()
+    def feature_engineer(self, 
+                        raw_data_file='raw_data_anon.csv', 
+                        raw_emotions_file='emotions_anon.csv',
+                        lower_threshold=100, 
+                        upper_threshold=10000,
+                        store=False,
+                        data_file='tweets.csv',
+                        emotions_file='emotions.csv',
+                        cascade_size_file='cascade_size.csv'):
+        '''
+        This function processes the raw data files and loads it into memory
 
-        if self.tweets is None:
-            self.tweets = pd.read_csv(self.tweets_file)
+        args: 
+            raw_data_file: Path to raw tweet data file
+            raw_emotions_file: Path to raw emotions file
+            lower_threshold: Minimum size of cascades to include
+            upper_threshold: Maximum size of cascades to include
+            store: Store preprocessed dataframes to filesystem
+            data_file: (ignored if store=False) filename of processed dataframe
+            data_file: (ignored if store=False) filename of processed emotions dataframe
 
-        if self.emo is None:
-            self.emo = pd.read_csv(self.emo_file)
+        '''  
+        self.logger.make_title('Feature engineer')
+        df, df_emo, df_cascade_size = self.__load_data(raw_data_file, raw_emotions_file, lower_threshold, upper_threshold)
+        df = self.__impute_data(df)
+        df = self.__compute_delay(df)
+        df = self.__encode_tweet_date(df)
+        df = self.__compute_new_tid(df)
+        df = self.__compute_depth(df)
+        df_cascade_size = self.__categorize_cascade_size(df_cascade_size)
 
-        tweets = self.tweets[(self.tweets.cascade_size >= lower_threshold) & (self.tweets.cascade_size <= upper_threshold)].reset_index(drop=True)
-        emos = self.emo
+        if store:
+            self.logger.step_start('Saving dataframes to directory...')
+            data_file = os.path.join(self.data_dir, data_file)
+            emotions_file = os.path.join(self.data_dir, emotions_file)
+            cascade_size_file = os.path.join(self.data_dir, cascade_size_file)
+            df.to_csv(data_file, header=True, index=False)
+            df_emo.to_csv(emotions_file, header=True, index=False)
+            df_cascade_size.to_csv(cascade_size_file, header=True, index=False)
+            self.logger.step_end()
 
-        tweets = tweets.sort_values(['cascade_id', 'datetime']).reset_index(drop=True)
-        tweets['new_tid'], tweets['new_parent_tid'] = self.__get_new_tid(tweets)
-        tweets['depth'] = self.__get_depths(tweets)
-
-        IDs = list(set(tweets.cascade_id).intersection(emos.cascade_id))
-
-        shuffle(IDs)
-        split = int(len(IDs) * split_ratio)
-        train_ids, test_ids = pd.DataFrame({'cascade_id': IDs[:split]}), pd.DataFrame({'cascade_id': IDs[split:]})
-
-        tweets_train = pd.merge(tweets, train_ids, how='inner').reset_index(drop=True)
-        tweets_test = pd.merge(tweets, test_ids, how='inner').reset_index(drop=True)
-        emo_train = pd.merge(emos, train_ids, how='inner').reset_index(drop=True)
-        emo_test = pd.merge(emos, test_ids, how='inner').reset_index(drop=True)
-        del tweets
-        del emos
-
-        for cname in ['user_followers', 'user_followees', 'user_engagement', 'user_account_age', 'retweet_delay', 'cascade_size']:
-            tweets_train[cname + '_log'] = logp(tweets_train[cname].values)
-            tweets_test[cname + '_log'] = logp(tweets_test[cname].values)
-        tweets_train = tweets_train.drop(['user_followers', 'user_followees', 'user_engagement', 'user_account_age', 'retweet_delay', 'cascade_size'], axis=1)
-        tweets_test = tweets_test.drop(['user_followers', 'user_followees', 'user_engagement', 'user_account_age', 'retweet_delay', 'cascade_size'], axis=1)
-        
-        tweets_train[self.to_standardize] = ss.fit_transform(tweets_train[self.to_standardize].values)
-        tweets_test[self.to_standardize] = ss.transform(tweets_test[self.to_standardize].values)
-
-        emo_train.iloc[:, 1:] = ss.fit_transform(emo_train.iloc[:, 1:].values)
-        emo_test.iloc[:, 1:] = ss.transform(emo_test.iloc[:, 1:].values)
-
-        print("Saving experiment data to directory... ", end='', flush=True)
-        tweets_train.to_csv(self.tweets_test_file, header=True, index=False)
-        tweets_test.to_csv(self.tweets_test_file, header=True, index=False)
-        emo_train.to_csv(self.emo_train_file, header=True, index=False)
-        emo_test.to_csv(self.emo_test_file, header=True, index=False)
-
-        self.tweets_train = tweets_train
-        self.tweets_test = tweets_test
-        self.emo_train = emo_train
-        self.emo_test = emo_test
-        print("done")
+        return df, df_emo
 
 
-    def generate_cascades(self, crops_dict):
-        self.__cleanup()
-        ss = StandardScaler()
-        ss_grouped = StandardScaler()
+    def __train_test_split(self, df, df_emo, split_ratio=0.85):
+        self.logger.step_start('Split train and test data...')
+        ids = df.cascade_id.unique().tolist()
+        shuffle(ids)
 
-        if self.tweets_train is None:
-            self.tweets_train = pd.read_csv(self.tweets_train_file)
+        split = int(len(ids) * split_ratio)
+        train_ids, test_ids = ids[:split], ids[split:]
+        train_df, test_df = df[df['cascade_id'].isin(train_ids)].copy(), df[df['cascade_id'].isin(test_ids)].copy()
+        train_df_emo, test_df_emo = df_emo[df_emo['cascade_id'].isin(train_ids)].copy(), df_emo[df_emo['cascade_id'].isin(test_ids)].copy()
 
-        if self.tweets_test is None:
-            self.tweets_test = pd.read_csv(self.tweets_test_file)
+        self.logger.step_end()
+        return train_df, test_df, train_df_emo, test_df_emo
 
-        if self.emo_train is None:
-            self.emo_train = pd.read_csv(self.emo_train_file)
+    def __compute_logarithm(self, df):
+        self.logger.step_start('Compute logarithm for user data...')
+        for cname in ['user_followers', 'user_followees', 'user_engagement', 'user_account_age', 'retweet_delay', 'n_children']:
+            df[cname + '_log'] = logp(df[cname].values)
 
-        if self.emo_test is None:
-            self.emo_test = pd.read_csv(self.emo_test_file)
+        df = df.drop(['user_followers', 'user_followees', 'user_engagement', 'user_account_age', 'retweet_delay', 'n_children'], axis=1)
+        self.logger.step_end()
+        return df
 
-        for (df_tweets, df_emo, post) in zip(*[(self.tweets_train.copy(), self.tweets_test.copy()), (self.emo_train, self.emo_test), ('', '_test')]):   
-            not_cropped = self.crop(df_tweets)   
-            if post == '':
-                not_cropped['n_children_log'] = ss.fit_transform(not_cropped.n_children.values.reshape(-1, 1))
-            else:
-                not_cropped['n_children_log'] = ss.transform(not_cropped.n_children.values.reshape(-1, 1))
-            
-            grouped = self.to_grouped(not_cropped, self.to_group)
-            
-            if post == '':
-                grouped.iloc[:, 2:] = ss_grouped.fit_transform(grouped.iloc[:, 2:])
-            else:
-                grouped.iloc[:, 2:] = ss_grouped.transform(grouped.iloc[:, 2:])
-
-            pd.merge(grouped, df_emo, on='cascade_id').to_csv(self.grouped_dir + 'grouped' + post + '.csv', header=True, index=False)
-
-            self.__save_cascades(not_cropped, df_emo, self.to_encode, post)
-            self.__save_cascades(not_cropped, df_emo, self.to_encode_structureless, '_structureless' + post)
-
-
-        for k, v in crops_dict.items():  
-            # loop through train and test
-            for (df_tweets, df_emo, post) in zip(*[(self.tweets_train.copy(), self.tweets_test.copy()), (self.emo_train, self.emo_test), ('', '_test')]):
-                cropped = self.crop(df_tweets, v)
-                if post == '':
-                    cropped['n_children_log'] = ss.fit_transform(cropped.n_children.values.reshape(-1, 1))
-                else:
-                    cropped['n_children_log'] = ss.transform(cropped.n_children.values.reshape(-1, 1))
-
-                grouped = self.to_grouped(cropped, self.to_group)            
-                if post == '':
-                    grouped.iloc[:, 2:] = ss_grouped.fit_transform(grouped.iloc[:, 2:])
-                else:
-                    grouped.iloc[:, 2:] = ss_grouped.transform(grouped.iloc[:, 2:])
-                
-                pd.merge(grouped, df_emo, on='cascade_id').to_csv(self.grouped_dir + 'grouped_' + k + post + '.csv', header=True, index=False)
-
-                self.__save_cascades(cropped, df_emo, self.to_encode, '_' + k + post)
-
-
-    def crop(self, tweets, threshold=False):
-        """
-        Returns df cropped at a certain threshold
-
-        Args :
-            tweets: df with tweets
-            threshold: threshold of time
-        """
-        def get_parents(df):
-            # returns df with number of children per tweet
-            df = df.copy()
-            parents = df.groupby(['cascade_id', 'new_parent_tid']).agg({'tid': 'count'}).reset_index()
-            parents = parents.rename(columns={'tid': 'n_children', 'new_parent_tid': 'new_tid'})
-            return parents
-
-        cropped = tweets.copy()
-
-        if threshold: 
-            cropped = cropped[cropped.root_delay < threshold]
-
-        cropped = pd.merge(cropped, get_parents(cropped), on=['cascade_id', 'new_tid'], how='left')
-        cropped = cropped.fillna({'n_children': 0})
-        cropped['n_children_log'] = logp(cropped.n_children)
-        cropped['is_leaf'] = (cropped.n_children == 0).astype(int)
+    def crop(self, df, threshold):
+        self.logger.step_start('Crop dataset...')
+        cropped = df[df.root_delay < threshold].copy()
+        self.logger.step_end()
         return cropped
 
+    def compute_n_children(self, df):
+        self.logger.step_start('Compute n_children...')
+        children = df['parent_tid'].value_counts().reset_index()
+        children.columns = ['tid', 'n_children']
 
-    def to_grouped(self, df, to_group):
-        """
-        Create df for standard feature classifiers with 1 cascade per row
-        In: 
-            - df : all tweets
-            - to_group : variables to average per cascade
-        Out: df with averaged node vars and aggregate statistics per cascade
-        """
-        
-        def get_cascade_statistics(small):
-            # get depth, breadth and depth to breadth ratio for a single cascade
-            
-            depths = small.depth
-            cascade_depth = max(depths)
-            cascade_breadth = max(Counter(depths).values())
-            db_ratio = cascade_depth / cascade_breadth
+        df = pd.merge(df, children, on='tid', how='left').fillna({'n_children': 0})
+        self.logger.step_end()
+        return df
 
-            return cascade_depth, cascade_breadth, db_ratio
+    def to_grouped(self, df, aggs):
+        df = df.copy()
+        sizes = df['cascade_id'].value_counts().reset_index()
+        sizes.columns = ['cascade_id', 'size']
 
-        aggs = {k: 'mean' for k in to_group}
-        aggs['n_children_log'] = 'max' 
-            
-        grouped = df.groupby(['cascade_id', 'cascade_size_log']).agg(aggs).reset_index()
+        breadths = df.groupby(['cascade_id', 'depth'], as_index=False).size().groupby('cascade_id')['size'].max().reset_index()
+        breadths.columns = ['cascade_id', 'breadth']
 
-        sizes = []
-        depths = []
-        breadths = []
-        db_ratios = []
+        grouped = df.groupby('cascade_id').agg(aggs).reset_index()
 
-        for cid in grouped.cascade_id:
-            small = df[df.cascade_id == cid]
-            depth, breadth, db_ratio = get_cascade_statistics(small)
-            sizes.append(small.shape[0])
-            depths.append(depth)
-            breadths.append(breadth)
-            db_ratios.append(db_ratio)
-
-        grouped['size'], grouped['depth'], grouped['breadth'] = sizes, depths, breadths
-        grouped['db_ratio'] = db_ratios
+        grouped = pd.merge(grouped, sizes, on='cascade_id')
+        grouped = pd.merge(grouped, breadths, on='cascade_id')
+        grouped['db_ratio'] = grouped['depth'] / grouped['breadth']
 
         return grouped
 
-
-    def __timediff(self, t1, t2):
-        """
-        Function that calculates dime difference in seconds between two datetimes
+    def __save_experiment_data(self, df, df_emo, df_grouped, threshold, test=False, structureless=False):
+        name = '_' + threshold
         
-        Args: time1, time2
-        """
-        if pd.isnull(t2):
-            return 0
-        else:
-            return (t1 - t2).total_seconds()
+        if structureless:
+            name += '_structureless'
 
+        if test:
+            name += '_test'
 
-    def __get_new_tid(self, df):
-        """
-        Assigns to tweets an id from 0 to N per cascade  in chronological order
-        where N is the size of the cascade -1
-        In : df with tweets
-        Out: series with new tweets and new parent tweets
-        """
-
-        df = df.copy()
-        df['new_tid'] = df.groupby('cascade_id').cumcount().astype(int)
-        parents = df[['cascade_id', 'tid', 'new_tid']]
-        parents = parents.rename({'tid': 'parent_tid', 'new_tid': 'new_parent_tid'}, axis=1)
-        df = pd.merge(df, parents, on=['cascade_id', 'parent_tid'], how='left')
-        df['new_parent_tid'] = df['new_parent_tid'].fillna(-1).astype('int64')
-        return df['new_tid'], df['new_parent_tid']
-
-
-    def __get_depths(self, df):
-        """
-        get node depth for ALL CASCADES
-        In : df with all tweets 
-        Out : list with depth of all nodes for every cascade
-        """
-
-        print('getting_depths')
-        
-        all_depths = []
-        
-        for cid in tqdm(df.cascade_id.unique()):
-            small = df[df.cascade_id == cid].copy()
-            all_depths.append(self.__get_nodes_depths(small))
-        
-        return list(chain(*all_depths))        
-        
-        
-    def __get_nodes_depths(self, small):
-        """
-        get nodes depth for SINGLE CASCADE
-        In : df with tweets for a single cascade
-        Out : list with depth of all nodes
-        """
-        
-        # create networkx graph
-        g = nx.DiGraph()
-        # add cascade nodes   
-        g.add_nodes_from(small.new_tid.values)
-        # add edges ; skip first because root node has no incoming parent
-        g.add_edges_from([(u, v) for u, v in zip(small.new_parent_tid, small.new_tid)][1:])
-
-        depths = nx.shortest_path_length(g, 0)
-        
-        return [depths[k] for k in sorted(depths.keys())]
-
-
-    def __save_cascades(self, df, df_emo, to_encode, name_append=''):
-        """
-        Save all the cascades with custom "Cascade" data structure and pt ~"pytorch" format
-        including nodes, edges,nodes covariates (X), label, root features
-        In:
-            - df: df with all the tweets with covariates
-            - df_emo: df with affective response to root tweet
-            - to_encode: column names to select as node covariates
-            - name_append: refers to specific cascade variant. Nothin for standard, otherwise 
-            crop type, structureless, test ...
-        """
-        print('saving cascades', name_append, flush=True)
-        
-        for cid in tqdm(df.cascade_id.unique()):	
-            small = df[df.cascade_id == cid].copy().reset_index()
+        self.logger.step_start('Saving cascades ' + name[1:] + '...')
+        for cid in df.cascade_id.unique():	
+            small = df[df.cascade_id == cid]
             emo = df_emo[df_emo.cascade_id == cid]
-
-            if emo.empty:
-                continue
 
             th_emo = th.Tensor(emo.iloc[:, 1:].values)
 
-            th_cascade_size = th.tensor([[small.cascade_size_log[0]]], dtype=th.float32)
+            to_encode = self.to_encode
+            if structureless:
+                to_encode = self.to_encode_structureless
             
             X = th.Tensor(small[to_encode].values)
-            is_leaf = th.Tensor(small.is_leaf.values)
+            is_leaf = th.Tensor(~small.was_retweeted.astype(bool).values)
             src, dest = small.new_tid[1:].values, small.new_parent_tid[1:].values
 
-            c = Cascade(cid, X, th_cascade_size, th_emo, src, dest, is_leaf)
+            c = Cascade(cid, X, th_emo, src, dest, is_leaf)
 
-            th.save(c, self.graphs_dir + str(cid) + name_append + '.pt')
+            th.save(c, self.graphs_dir + str(cid) + name + '.pt')
+        
+        df_grouped.to_csv(self.grouped_dir + 'grouped' + name + '.csv', header=True, index=False)
+        self.logger.step_end()
+        
 
+    def generate_experiment_data(self, tweets, emotions, crops_dict, split_ratio=0.85, structureless=False):
+        ss = StandardScaler()
+        ss_grouped = StandardScaler()
+        ss_emo = StandardScaler()
+
+        self.__cleanup()
+
+        for k,v in crops_dict.items():
+            self.logger.make_title('Generate experiment data for ' + k)
+            cropped = self.crop(tweets, v)
+            cropped = self.compute_n_children(cropped)
+            cropped = self.__compute_logarithm(cropped)
+
+            train_df, test_df, train_df_emo, test_df_emo = self.__train_test_split(cropped, emotions, split_ratio)
+
+            for df, df_emo, test in zip([train_df, test_df], [train_df_emo, test_df_emo], [False, True]):
+
+                self.logger.step_start('Standardize data...')
+                grouped = self.to_grouped(df, self.to_group)
+
+                if not test:
+                    df[self.to_standardize] = ss.fit_transform(df[self.to_standardize].values)
+                    df_emo.iloc[:, 1:] = ss_emo.fit_transform(df_emo.iloc[:, 1:].values)
+                    grouped.iloc[:, 1:] = ss_grouped.fit_transform(grouped.iloc[:, 1:])
+                else:
+                    df[self.to_standardize] = ss.transform(df[self.to_standardize].values)
+                    df_emo.iloc[:, 1:] = ss_emo.transform(df_emo.iloc[:, 1:].values)
+                    grouped.iloc[:, 1:] = ss_grouped.fit_transform(grouped.iloc[:, 1:])
+
+                grouped = pd.merge(grouped, df_emo)
+                self.logger.step_end()
+
+                self.__save_experiment_data(df, df_emo, grouped, k, test, structureless)
+                
     
     def __cleanup(self):
         print('cleanup graph directory')
         for dir in [self.graphs_dir, self.grouped_dir]:
             for filename in os.listdir(dir):
-                file_path = os.path.join(self.graphs_dir, filename)
+                file_path = os.path.join(dir, filename)
                 try:
                     if os.path.isfile(file_path) or os.path.islink(file_path):
                         os.unlink(file_path)
@@ -483,42 +392,47 @@ class Preprocessing:
                     print('Failed to delete %s. Reason: %s' % (file_path, e))
 
 
-def cascade_generator():
-    if lower_threshold != -1 and upper_threshold != -1:
-        # get cascade ids of cascades whose size is between lower and upper thesholds<
-        cascade_ids = [k for k, v in Counter(tweets.cascade_id).items() if v >= lower_threshold and v < upper_threshold]
-        vprint('cascade ids retrieved')
-        sieve = pd.DataFrame({'cascade_id': cascade_ids})
-        vprint('started merging')
-        tweets = pd.merge(sieve, tweets, how='left', on='cascade_id')
-        vprint('finished merging')
-        
-
 if __name__ == "__main__":
+    try: os.chdir(os.path.dirname(sys.argv[0]))
+    except: pass
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--data_dir', dest = 'data_dir', default = '../data/', type = str)
     parser.add_argument('--verbose', dest='verbose', default=1, type=int)
     parser.add_argument('--feature_engineer', action='store_true', default=False, dest='feature_engineer')
+    parser.add_argument('--data_file', dest = 'data_file', default = 'tweets.csv', type = str)
+    parser.add_argument('--emotions_file', dest = 'emotions_file', default = 'emotions.csv', type = str)
+    parser.add_argument('--lower', dest='lower', default=100, type=int)
+    parser.add_argument('--upper', dest='upper', default=10000, type=int)
+    parser.add_argument('--structureless', action='store_true', default = False)
+    parser.add_argument('--split', dest='split', default=0.85, type=float)
 
     args = parser.parse_args()
 
     crops = {
-    '15_mins': 60 * 15,
-    '30_mins': 60 * 30,
-    '1_hour': 60. * 60,
-    '3_hour': 60. * 60 * 3,
-    '24_hour': 60. * 60 * 24}
+        '15_mins': 60 * 15,
+        '30_mins': 60 * 30,
+        '1_hour': 60. * 60,
+        '3_hour': 60. * 60 * 3,
+        '24_hour': 60. * 60 * 24
+    }
 
     data_dir = args.data_dir
     raw_data_file = args.data_dir + 'raw_data_anon.csv'
     raw_emotions_file = args.data_dir + 'emotions_anon.csv'
-    raw_metadata_file = args.data_dir + 'metadata_anon.txt'
+    data_file = args.data_dir + args.data_file
+    emotions_file = args.data_dir + args.emotions_file
 
-    preprocessor = Preprocessing(data_dir)
-    preprocessor.feature_engineer()
-    preprocessor.generate_experiment_data()
-    preprocessor.generate_cascades(crops)
+    preprocessor = Preprocessor(data_dir, args.verbose)
+
+    if args.feature_engineer:
+        df, df_emo = preprocessor.feature_engineer(raw_data_file, raw_emotions_file, args.lower, args.upper, True, data_file, emotions_file)
+    else:
+        df = pd.read_csv(data_file)
+        df_emo = pd.read_csv(emotions_file)
+        
+    preprocessor.generate_experiment_data(df, df_emo, crops, args.split, args.structureless)
 
     
 

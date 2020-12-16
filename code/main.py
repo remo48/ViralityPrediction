@@ -78,11 +78,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--x_size', dest = 'x_size', default = 12, type = int)
-    parser.add_argument('--h_size', dest = 'h_size', default = 3, type = int)
+    parser.add_argument('--h_size', dest = 'h_size', default = 32, type = int)
     parser.add_argument('--sample', dest = 'sample', action='store_true')
     parser.add_argument('--bsize', dest = 'batch_size', default = 25, type = int)
     parser.add_argument('--pd', dest = 'p_drop', default = 0.1, type = float)
-    parser.add_argument('--epochs', dest = 'epochs', default = 50, type = int)
+    parser.add_argument('--epochs', dest = 'epochs', default = 60, type = int)
     parser.add_argument('--lr_tree', dest = 'lr_tree', default = 0.01, type = float)
     parser.add_argument('--lr_top', dest = 'lr_top', default = 0.01, type = float)
     parser.add_argument('--decay_tree', dest = 'decay_tree', default = 0.003, type = float)

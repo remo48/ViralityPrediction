@@ -12,13 +12,12 @@ class Cascade:
     class that contains a single cascade. The cascade data structure
     is save and then loaded in ".pt" ~ pytorch format.
     """
-    def __init__(self, cascade_id, X, cascade_size, emo, src, dest, isleaf):
+    def __init__(self, cascade_id, X, emo, src, dest, isleaf):
         # init the cascade data structure with data
 
         self.cascade_id = cascade_id
         # node covariates
         self.X = X
-        self.cascade_size = cascade_size
         self.size = X.shape[0]
         self.isleaf = isleaf
         self.isroot = th.cat([th.Tensor([1]), th.zeros(self.size - 1)])
@@ -57,7 +56,7 @@ class Cascade:
         #if emo_data:
         #    e = perturbate(e, emo_data[self.y.item()]['mean'], emo_data[self.y.item()]['cov'])
 
-        return (g, self.cascade_size, e)
+        return (g, e)
     
 
 class CascadeData(Dataset):
@@ -91,15 +90,6 @@ class CascadeData(Dataset):
         self.leaf_ins = leaf_ins
         self.node_reor = node_reor
 
-        self.log = {
-            'variant': variant,
-            'structureless': structureless,
-            'sample': sample,
-            'emo_pert': emo_pert,
-            'leaf_ins': self.leaf_ins,
-            'node_reor': self.node_reor
-        }
-
         # prepend underscore to variant to load cascade with name ID_variant
         self.variant = ['', '_' + variant][variant != '']
         self.structureless = ['', '_structureless'][structureless]
@@ -130,6 +120,8 @@ class CascadeData(Dataset):
             self.cascades_proc.append(c.retrieve_data(self.leaf_ins, self.node_reor, self.emo_data))
 
         del self.cascades
+
+        self.cascade_sizes = pd.read_csv(self.data_dir + 'cascade_size.csv')
         
 
     def __len__(self):
@@ -141,9 +133,10 @@ class CascadeData(Dataset):
         
         ID = self.list_IDs[index]
 
-        g, v, emo = self.cascades_proc[index]
+        g, emo = self.cascades_proc[index]
+        y = self.cascade_sizes.loc[ID, ['cascade_size_log']]
 
-        return th.Tensor([int(ID)]), g, v, emo
+        return th.Tensor([int(ID)]), g, y, emo
 
     def sample(self, ids):
         # sample ids

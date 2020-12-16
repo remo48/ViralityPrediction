@@ -1,4 +1,5 @@
-import os
+import os, sys
+import time
 import collections
 import numpy as np
 import pandas as pd
@@ -23,6 +24,48 @@ def ld(ID, graphs_dir):
 # cascade batch named tuple. Used to create a "batch of graphs"
 # for parallel processing from a list of graphs
 CBatch = collections.namedtuple('CBatch', ['graph', 'ID', 'X', 'isroot', 'isleaf', 'y', 'emo'])
+
+
+class Logger:
+    
+    def __init__(self, verbose=1):
+        super().__init__()
+
+        self.verbose = verbose
+        self.indent = 4
+        self.time_width = 10
+        self.terminal_width = os.get_terminal_size().columns
+        self.max_length = self.terminal_width - self.time_width - 4
+
+    def make_title(self, title):
+        if self.verbose > 0:
+            sys.stdout.write(title+'\n')
+            sys.stdout.flush()
+
+    def step_start(self, str):
+        if self.verbose > 1:
+            self.out = self.indent*' ' + str
+            self.start = time.time()
+            sys.stdout.write(self.out)
+            sys.stdout.flush()
+
+    def step_end(self, info=''):
+        if self.verbose > 1:
+            elapsed = time.time() - self.start
+
+            out = self.out + ' ' + info
+
+            if elapsed > 60:
+                time_format = '%d:%02d' % (elapsed // 60, elapsed % 60)
+            else:
+                time_format = '%.2fs' % elapsed
+            pass
+
+            sys.stdout.write('\r')
+            sys.stdout.write('{:{length}}{:>{time_length}}\n'.format(out, time_format, length=self.max_length, time_length=self.time_width))
+            sys.stdout.flush()
+
+
 
 
 def class_ratio(gen):
