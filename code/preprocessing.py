@@ -134,8 +134,9 @@ class Preprocessor:
 
         return df, df_emo, df_cascade_size
 
-    def __categorize_cascade_size(self, df_cascade_size):
-        return df_cascade_size
+    def __process_cascade_size(self, df):
+        df['cascade_size_log'] = logp(df['cascade_size'].values)
+        return df
 
     def __impute_data(self, df):
         self.logger.step_start('Impute missing user data...')
@@ -192,7 +193,7 @@ class Preprocessor:
         parents = df.loc[df.was_retweeted == 1, ['tid', 'new_tid']]
         parents.columns = ['parent_tid', 'new_parent_tid']
         df = pd.merge(df, parents, on=['parent_tid'], how='left')
-        df['new_parent_tid'] = df['new_parent_tid'].fillna(-1)
+        df['new_parent_tid'] = df['new_parent_tid'].fillna(-1).astype(int)
         self.logger.step_end()
 
         return df
@@ -243,7 +244,7 @@ class Preprocessor:
         df = self.__encode_tweet_date(df)
         df = self.__compute_new_tid(df)
         df = self.__compute_depth(df)
-        df_cascade_size = self.__categorize_cascade_size(df_cascade_size)
+        df_cascade_size = self.__process_cascade_size(df_cascade_size)
 
         if store:
             self.logger.step_start('Saving dataframes to directory...')
@@ -366,7 +367,7 @@ class Preprocessor:
                 if not test:
                     df[self.to_standardize] = ss.fit_transform(df[self.to_standardize].values)
                     df_emo.iloc[:, 1:] = ss_emo.fit_transform(df_emo.iloc[:, 1:].values)
-                    grouped.iloc[:, 1:] = ss_grouped.fit_transform(grouped.iloc[:, 1:])
+                    grouped.iloc[:, 1:] = ss_grouped.fit_transform(grouped.iloc[:, 1:].values)
                 else:
                     df[self.to_standardize] = ss.transform(df[self.to_standardize].values)
                     df_emo.iloc[:, 1:] = ss_emo.transform(df_emo.iloc[:, 1:].values)

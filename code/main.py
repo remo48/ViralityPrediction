@@ -32,8 +32,8 @@ def main(args):
         
     device = set_device(cuda_id)
 
-    train_ids = np.array([ID.split('.')[0] for ID in os.listdir(graphs_dir) if '_' not in ID])
-    test_ids = np.unique([ID.split('_')[0] for ID in os.listdir(graphs_dir) if 'test' in ID])
+    train_ids = np.array([ID.split('_')[0] for ID in os.listdir(graphs_dir) if args.variant in ID and 'test' not in ID])
+    test_ids = np.unique([ID.split('_')[0] for ID in os.listdir(graphs_dir) if args.variant + '_test' in ID])
 
     train_set = CascadeData(train_ids, data_dir, variant=args.variant)
     test_set = CascadeData(test_ids, data_dir, variant=args.variant, test=True)
@@ -95,7 +95,7 @@ if __name__ == "__main__":
     parser.add_argument('--save_ids', action='store_true', default = False)
     parser.add_argument('--deep', default = 1, type=int)
     parser.add_argument('--bi', default = 1, type=int)
-    parser.add_argument('--variant', type = str, default = '')
+    parser.add_argument('--variant', type = str, default = '1_hour')
     parser.add_argument('--structureless', action='store_true', default = False)
     parser.add_argument('--log', action='store_true', default = False)
 

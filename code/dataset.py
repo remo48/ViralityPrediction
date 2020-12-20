@@ -1,6 +1,7 @@
 import torch as th
 import dgl
 from utils import *
+import torch as th
 from torch.utils.data import Dataset
 import pandas as pd
 import numpy as np
@@ -96,6 +97,15 @@ class CascadeData(Dataset):
         self.test = ['', '_test'][test]
         self.data_dir = data_dir
 
+        self.log = {
+            'variant': variant,
+            'structureless': structureless,
+            'sample': sample,
+            'emo_pert': emo_pert,
+            'leaf_ins': self.leaf_ins,
+            'node_reor': self.node_reor
+        }
+
         'Initialization'
         if sample:
             list_IDs = self.sample(list_IDs)    
@@ -108,21 +118,14 @@ class CascadeData(Dataset):
 
         self.list_IDs = list_IDs
 
-        IDs = [ID + self.variant + self.structureless + self.test for ID in self.list_IDs]
-
+        df_cascade_size = pd.read_csv(self.data_dir + 'cascade_size.csv')
         self.cascades = []
-        for ID in IDs:
-            self.cascades.append(ld(ID, self.data_dir + 'graphs/'))
-        self.x_size = self.cascades[0].X.shape[1]
-
-        self.cascades_proc = []
-        for c in self.cascades:
-            self.cascades_proc.append(c.retrieve_data(self.leaf_ins, self.node_reor, self.emo_data))
-
-        del self.cascades
-
-        self.cascade_sizes = pd.read_csv(self.data_dir + 'cascade_size.csv')
-        
+        self.cascade_sizes = []
+        for ID in list_IDs:
+            cascade_id = ID + self.variant + self.structureless + self.test
+            self.cascades.append(ld(cascade_id, self.data_dir + 'graphs/').retrieve_data(self.leaf_ins, self.node_reor, self.emo_data))
+            size = df_cascade_size.loc[df_cascade_size['cascade_id'] == int(ID), ['cascade_size_log']].values
+            self.cascade_sizes.append(th.tensor(size, dtype=th.float32))
 
     def __len__(self):
         # Denotes the total number of samples
@@ -133,8 +136,8 @@ class CascadeData(Dataset):
         
         ID = self.list_IDs[index]
 
-        g, emo = self.cascades_proc[index]
-        y = self.cascade_sizes.loc[ID, ['cascade_size_log']]
+        g, emo = self.cascades[index]
+        y = self.cascade_sizes[index]
 
         return th.Tensor([int(ID)]), g, y, emo
 
