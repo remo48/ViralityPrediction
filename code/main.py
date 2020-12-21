@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 import argparse
 from datetime import datetime
 from utils import *
-from model import DeepTreeLSTMClassifier, DeepTreeLSTMRegressor
+from model import DeepTreeLSTMRegressor
 from dataset import CascadeData
 from trainer import DeepTreeTrainer
 
@@ -38,8 +38,8 @@ def main(args):
     train_set = CascadeData(train_ids, data_dir, variant=args.variant)
     test_set = CascadeData(test_ids, data_dir, variant=args.variant, test=True)
 
-    train_generator = DataLoader(train_set, collate_fn=cascade_batcher(device), batch_size= args.batch_size, num_workers=8)
-    test_generator = DataLoader(test_set, collate_fn=cascade_batcher(device), batch_size= args.batch_size, num_workers=8)
+    train_generator = DataLoader(train_set, collate_fn=cascade_batcher(device), batch_size=args.batch_size, num_workers=8)
+    test_generator = DataLoader(test_set, collate_fn=cascade_batcher(device), batch_size=args.batch_size, num_workers=8)
 
     # r_train = class_ratio(train_generator)
 
