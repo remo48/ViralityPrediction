@@ -293,6 +293,7 @@ class Preprocessor:
         children.columns = ['tid', 'n_children']
 
         df = pd.merge(df, children, on='tid', how='left').fillna({'n_children': 0})
+        df['isleaf'] = (df['n_children'] == 0).astype(int)
         self.logger.step_end()
         return df
 
@@ -333,7 +334,7 @@ class Preprocessor:
                 to_encode = self.to_encode_structureless
             
             X = th.Tensor(small[to_encode].values)
-            is_leaf = th.Tensor(~small.was_retweeted.astype(bool).values)
+            is_leaf = th.Tensor(small['isleaf'].values)
             src, dest = small.new_tid[1:].values, small.new_parent_tid[1:].values
 
             c = Cascade(cid, X, th_emo, src, dest, is_leaf)
@@ -344,62 +345,9 @@ class Preprocessor:
         self.logger.step_end()
 
 
-    def generate_experiment_data_copy(self, tweets, emotions, crops_dict, split_ratio=0.85, structureless=False):
+    def generate_experiment_data(self, tweets, emotions, crops_dict, split_ratio=0.85, structureless=False):
         ss = StandardScaler()
         ss_grouped = StandardScaler()
-
-        self.__cleanup()
-        train_df, test_df, train_df_emo, test_df_emo = self.__train_test_split(tweets, emotions, split_ratio)
-
-        for cname in ['user_followers', 'user_followees', 'user_engagement', 'user_account_age', 'retweet_delay']:
-            train_df[cname + '_log'] = logp(train_df[cname].values)
-            test_df[cname + '_log'] = logp(test_df[cname].values)
-
-        stand = ['user_followers_log', 
-                'user_followees_log',
-                'user_engagement_log', 
-                'user_account_age_log',
-                'retweet_delay_log',
-                'depth']
-
-        train_df[stand] = ss.fit_transform(train_df[stand].values)
-        test_df[stand] = ss.transform(test_df[stand].values)
-
-        train_df_emo.iloc[:, 1:] = ss.fit_transform(train_df_emo.iloc[:, 1:].values)
-        test_df_emo.iloc[:, 1:] = ss.fit_transform(test_df_emo.iloc[:, 1:].values)
-
-        for k,v in crops_dict.items():
-            self.logger.make_title('Generate experiment data for ' + k)
-
-            for df, df_emo, test in zip([train_df, test_df], [train_df_emo, test_df_emo], [False, True]):
-                cropped = self.crop(df, v)
-                cropped = self.compute_n_children(cropped)
-                cropped['n_children_log'] = logp(cropped['n_children'].values)
-
-                if not test:
-                    cropped['n_children_log'] = ss.fit_transform(cropped.n_children.values.reshape(-1, 1))
-                else:
-                    cropped['n_children_log'] = ss.transform(cropped.n_children.values.reshape(-1, 1))
-
-
-                self.logger.step_start('Standardize data...')
-                grouped = self.to_grouped(cropped, self.to_group)
-
-                if not test:
-                    grouped.iloc[:, 1:] = ss_grouped.fit_transform(grouped.iloc[:, 1:].values)
-                else:
-                    grouped.iloc[:, 1:] = ss_grouped.transform(grouped.iloc[:, 1:].values)
-
-                grouped = pd.merge(grouped, df_emo)
-                self.logger.step_end()
-
-                self.__save_experiment_data(cropped, df_emo, grouped, k, test, structureless)
-                
-
-
-    def generate_experiment_data(self, tweets, emotions, crops_dict, split_ratio=0.85, structureless=False):
-        ss = MinMaxScaler()
-        ss_grouped = MinMaxScaler()
         ss_emo = StandardScaler()
 
         self.__cleanup()
@@ -419,11 +367,11 @@ class Preprocessor:
 
                 if not test:
                     df[self.to_standardize] = ss.fit_transform(df[self.to_standardize].values)
-                    #df_emo.iloc[:, 1:] = ss_emo.fit_transform(df_emo.iloc[:, 1:].values)
+                    df_emo.iloc[:, 1:] = ss_emo.fit_transform(df_emo.iloc[:, 1:].values)
                     grouped.iloc[:, 1:] = ss_grouped.fit_transform(grouped.iloc[:, 1:].values)
                 else:
                     df[self.to_standardize] = ss.transform(df[self.to_standardize].values)
-                    #df_emo.iloc[:, 1:] = ss_emo.transform(df_emo.iloc[:, 1:].values)
+                    df_emo.iloc[:, 1:] = ss_emo.transform(df_emo.iloc[:, 1:].values)
                     grouped.iloc[:, 1:] = ss_grouped.transform(grouped.iloc[:, 1:])
 
                 grouped = pd.merge(grouped, df_emo)
@@ -466,9 +414,13 @@ if __name__ == "__main__":
     crops = {
         '15_mins': 60 * 15,
         '30_mins': 60 * 30,
-        '1_hour': 60. * 60,
-        '3_hour': 60. * 60 * 3,
-        '24_hour': 60. * 60 * 24
+        '1_hour': 60 * 60,
+        '3_hour': 60 * 60 * 3,
+        '24_hour': 60 * 60 * 24
+    }
+
+    crops_test = {
+        '1_hour': 60 * 60
     }
 
     data_dir = args.data_dir
@@ -485,7 +437,7 @@ if __name__ == "__main__":
         df = pd.read_csv(data_file)
         df_emo = pd.read_csv(emotions_file)
         
-    preprocessor.generate_experiment_data_copy(df, df_emo, crops, args.split, args.structureless)
+    preprocessor.generate_experiment_data(df, df_emo, crops_test, args.split, args.structureless)
 
     
 
