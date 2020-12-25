@@ -350,6 +350,9 @@ class Preprocessor:
         ss_grouped = StandardScaler()
         ss_emo = StandardScaler()
 
+        if not self.__confirm():
+            return
+
         self.__cleanup()
 
         for k,v in crops_dict.items():
@@ -392,6 +395,11 @@ class Preprocessor:
                 except Exception as e:
                     print('Failed to delete %s. Reason: %s' % (file_path, e))
 
+    def __confirm(self):
+        answer = ""
+        while answer not in ['y', 'n']:
+            answer = input('Are you sure you want to continue, this will delete all previously generated experiment data? [Y/N] ').lower()
+        return answer == 'y'
 
 if __name__ == "__main__":
     try: os.chdir(os.path.dirname(sys.argv[0]))
@@ -437,8 +445,4 @@ if __name__ == "__main__":
         df = pd.read_csv(data_file)
         df_emo = pd.read_csv(emotions_file)
         
-    preprocessor.generate_experiment_data(df, df_emo, crops_test, args.split, args.structureless)
-
-    
-
-    
+    preprocessor.generate_experiment_data(df, df_emo, crops, args.split, args.structureless)

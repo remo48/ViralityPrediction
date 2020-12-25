@@ -64,25 +64,25 @@ def main(args):
     model_trainer.compile(optimizer_tree, optimizer_top, criterion, scheduler_tree=scheduler_tree, scheduler_top=scheduler_top, callbacks=callbacks, metrics=['mae'])
     model_trainer.fit(train_generator, test_generator, epochs, cuda_id)
     
-    # ys = []
-    # for batch in test_generator:
-    #     ys.append(batch.y)
+    ys = []
+    for batch in test_generator:
+        ys.append(batch.y)
 
-    # y = th.cat(ys, dim=0).flatten().tolist()
-    # y_pred = model_trainer.predict(test_generator).round().flatten().tolist()
-    # df_res = pd.DataFrame({'id': test_ids, 'y_true' : y, 'y_pred' : y_pred})
-    # df_res.to_csv('../results/preds.csv', index=False, header=True)
+    y = th.cat(ys, dim=0).flatten().tolist()
+    y_pred = model_trainer.predict(test_generator).flatten().tolist()
+    df_res = pd.DataFrame({'id': test_ids, 'y_true' : y, 'y_pred' : y_pred})
+    df_res.to_csv('../results/preds.csv', index=False, header=True)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--x_size', dest = 'x_size', default = 12, type = int)
-    parser.add_argument('--h_size', dest = 'h_size', default = 32, type = int)
+    parser.add_argument('--h_size', dest = 'h_size', default = 10, type = int)
     parser.add_argument('--sample', dest = 'sample', action='store_true')
-    parser.add_argument('--bsize', dest = 'batch_size', default = 25, type = int)
-    parser.add_argument('--pd', dest = 'p_drop', default = 0.1, type = float)
-    parser.add_argument('--epochs', dest = 'epochs', default = 60, type = int)
+    parser.add_argument('--bsize', dest = 'batch_size', default = 10, type = int)
+    parser.add_argument('--pd', dest = 'p_drop', default = 0.15, type = float)
+    parser.add_argument('--epochs', dest = 'epochs', default = 10, type = int)
     parser.add_argument('--lr_tree', dest = 'lr_tree', default = 0.01, type = float)
     parser.add_argument('--lr_top', dest = 'lr_top', default = 0.01, type = float)
     parser.add_argument('--decay_tree', dest = 'decay_tree', default = 0.003, type = float)

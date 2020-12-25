@@ -10,7 +10,6 @@ class ChildSumTreeLSTMCell(nn.Module):
         self.U_iou = nn.Linear(h_size, 3 * h_size, bias=False)
         self.b_iou = nn.Parameter(th.zeros(1, 3 * h_size))
         self.U_f = nn.Linear(h_size, h_size)
-        self.d = nn.Dropout(0.2)
 
     def message_func(self, edges):
         return {'h': edges.src['h'], 'c': edges.src['c']}
@@ -71,9 +70,9 @@ class TreeLSTM(nn.Module):
         head_h = th.index_select(h, 0, head_ids)
         lims_ids = head_ids.tolist() + [g.number_of_nodes()]
         # average of h of non root node by tree
-        inner_h = th.cat([th.mean(h[s+1:e,:],dim=0).view(1,-1) for s, e in zip(lims_ids[:-1],lims_ids[1:])])
-        out = th.cat([head_h, inner_h], dim = 1)
-        #out = head_h
+        #inner_h = th.cat([th.mean(h[s+1:e,:],dim=0).view(1,-1) for s, e in zip(lims_ids[:-1],lims_ids[1:])])
+        #out = th.cat([head_h, inner_h], dim = 1)
+        out = head_h
         return out
 
 class BiDiTreeLSTM(nn.Module):
@@ -153,6 +152,10 @@ class DeepTreeLSTM(nn.Module):
         self.top_sizes = top_sizes
         self.pd = pd
 
+        self.top_input_size = 2*self.h_size
+        if not self.bi:
+            self.top_input_size = self.h_size
+
         self.log = {
             'h_size': self.h_size,
             'bi': self.bi,
@@ -193,7 +196,7 @@ class DeepTreeLSTMRegressor(DeepTreeLSTM):
         if self.deep:
         
             net.add_module('d_in', nn.Dropout(p=self.pd))
-            net.add_module('l_in', nn.Linear(2*self.h_size+emo_size, self.top_sizes[0]))
+            net.add_module('l_in', nn.Linear(self.top_input_size + emo_size, self.top_sizes[0]))
             net.add_module('tf_in', nn.ReLU())
 
             for i, (in_dim, out_dim) in enumerate(zip(self.top_sizes[:-1], self.top_sizes[1:])):
@@ -206,7 +209,7 @@ class DeepTreeLSTMRegressor(DeepTreeLSTM):
 
         else:
             net.add_module('d', nn.Dropout(p=self.pd))
-            net.add_module('l', nn.Linear(2*self.h_size, 1))
+            net.add_module('l', nn.Linear(self.top_input_size, 1))
 
         self.top_net = net
 
@@ -222,7 +225,7 @@ class DeepTreeLSTMClassifier(DeepTreeLSTM):
         if self.deep:
         
             net.add_module('d_in', nn.Dropout(p=self.pd))
-            net.add_module('l_in', nn.Linear(2*self.h_size+emo_size, self.top_sizes[0]))
+            net.add_module('l_in', nn.Linear(self.top_input_size + emo_size, self.top_sizes[0]))
             net.add_module('tf_in', nn.ReLU())
 
             for i, (in_dim, out_dim) in enumerate(zip(self.top_sizes[:-1], self.top_sizes[1:])):
@@ -236,7 +239,7 @@ class DeepTreeLSTMClassifier(DeepTreeLSTM):
 
         else:
             net.add_module('d', nn.Dropout(p=self.pd))
-            net.add_module('l', nn.Linear(2*self.h_size, num_classes))
+            net.add_module('l', nn.Linear(self.top_input_size, num_classes))
 
         self.top_net = net
 
