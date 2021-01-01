@@ -22,6 +22,8 @@ class MetricContainer:
                 self.metrics.append(AUC())
             elif metric == 'precision':
                 self.metrics.append(Precision())
+            elif metric == 'mul_acc':
+                self.metrics.append(Multi_Accuracy())
 
     def __call__(self, output_batch, target_batch):
         metric_logs = {}
@@ -94,6 +96,24 @@ class Accuracy(Metric):
         y_pred = sigmoid(y_pred)
         y_pred_round = y_pred.round().long()
         self.correct_sample += y_pred_round.eq(y_true).float().sum()
+        self.seen_sample += len(y_pred)
+        accuracy = float(self.correct_sample) / float(self.seen_sample)
+        return accuracy
+
+class Multi_Accuracy(Metric):
+    def __init__(self):
+        self.name = 'mul_acc'
+        self.seen_sample = 0
+        self.correct_sample = 0
+
+    def reset(self):
+        self.seen_sample = 0
+        self.correct_sample = 0
+
+    def __call__(self, y_pred, y_true):
+        y_pred_softmax = th.softmax(y_pred, dim = 1)
+        y_pred_tags = y_pred_softmax.argmax(dim=1)
+        self.correct_sample += (y_pred_tags == y_true).float().sum()
         self.seen_sample += len(y_pred)
         accuracy = float(self.correct_sample) / float(self.seen_sample)
         return accuracy

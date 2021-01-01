@@ -36,8 +36,6 @@ class Preprocessor:
         '''
 
         self.data_dir = data_dir
-        self.graphs_dir = os.path.join(self.data_dir, 'graphs/')
-        self.grouped_dir = os.path.join(self.data_dir, 'grouped/')
 
         self.logger = Logger(verbose)
 
@@ -113,14 +111,6 @@ class Preprocessor:
         df['datetime'] = pd.to_datetime(df['tweet_date'], format='%Y-%m-%d %H:%M:%S')
         df = df.drop(['rumor_id', 'rumor_category', 'veracity', 'tweet_date'], axis=1)
 
-        self.logger.step_start('Drop cascades not in threshold...')
-        df_cascade_size = df['cascade_id'].value_counts().reset_index()
-        df_cascade_size.columns = ['cascade_id', 'cascade_size']
-
-        df = pd.merge(df, df_cascade_size, on='cascade_id')
-        df = df[(df.cascade_size >= int(lower_threshold)) & (df.cascade_size <= int(upper_threshold))].reset_index(drop=True)
-        self.logger.step_end('{} tweets after filtering'.format(df.shape[0]))
-
         self.logger.step_start('Load emotions data...')
         df_emo = pd.read_csv(raw_emotions_file)
         ids = df[['tid', 'cascade_id']]
@@ -132,10 +122,19 @@ class Preprocessor:
         df = df[df.cascade_id.isin(df_emo.cascade_id)]
         self.logger.step_end('{} tweets after dropping'.format(df.shape[0]))
 
+        self.logger.step_start('Drop cascades not in threshold...')
+        df_cascade_size = df['cascade_id'].value_counts().reset_index()
+        df_cascade_size.columns = ['cascade_id', 'cascade_size']
+
+        df = pd.merge(df, df_cascade_size, on='cascade_id')
+        df = df[(df.cascade_size >= int(lower_threshold)) & (df.cascade_size <= int(upper_threshold))].reset_index(drop=True)
+        self.logger.step_end('{} tweets after filtering'.format(df.shape[0]))
+
         return df, df_emo, df_cascade_size
 
     def __process_cascade_size(self, df):
         df['cascade_size_log'] = logp(df['cascade_size'].values)
+        df['category'] = pd.cut(df['cascade_size'], bins=[0,1,100,1000,100000], labels=[0,1,2,3])
         return df
 
     def __impute_data(self, df):
@@ -315,12 +314,11 @@ class Preprocessor:
 
     def __save_experiment_data(self, df, df_emo, df_grouped, threshold, test=False, structureless=False):
         name = '_' + threshold
+        name_structureless = name + '_structureless'
         
-        if structureless:
-            name += '_structureless'
-
         if test:
             name += '_test'
+            name_structureless += '_test'
 
         self.logger.step_start('Saving cascades ' + name[1:] + '...')
         for cid in df.cascade_id.unique():	
@@ -329,26 +327,39 @@ class Preprocessor:
 
             th_emo = th.Tensor(emo.iloc[:, 1:].values)
 
-            to_encode = self.to_encode
-            if structureless:
-                to_encode = self.to_encode_structureless
+            X = th.Tensor(small[self.to_encode].values)
             
-            X = th.Tensor(small[to_encode].values)
             is_leaf = th.Tensor(small['isleaf'].values)
             src, dest = small.new_tid[1:].values, small.new_parent_tid[1:].values
-
+                
             c = Cascade(cid, X, th_emo, src, dest, is_leaf)
-
             th.save(c, self.graphs_dir + str(cid) + name + '.pt')
-        
+            
+            if structureless:
+                X_structureless = th.Tensor(small[self.to_encode_structureless].values)
+                c_structureless = Cascade(cid, X_structureless, th_emo, src, dest, is_leaf)
+                th.save(c_structureless, self.graphs_dir + str(cid) + name_structureless + '.pt')
+
         df_grouped.to_csv(self.grouped_dir + 'grouped' + name + '.csv', header=True, index=False)
         self.logger.step_end()
 
 
-    def generate_experiment_data(self, tweets, emotions, crops_dict, split_ratio=0.85, structureless=False):
+    def generate_experiment_data(self, 
+                                tweets, 
+                                emotions,
+                                crops_dict, 
+                                split_ratio=0.85, 
+                                structureless=False,
+                                graphs_dir='graphs/',
+                                grouped_dir='grouped/'):
+
         ss = StandardScaler()
         ss_grouped = StandardScaler()
         ss_emo = StandardScaler()
+
+        self.graphs_dir = os.path.join(self.data_dir, graphs_dir)
+        self.grouped_dir = os.path.join(self.data_dir, grouped_dir)
+
 
         if not self.__confirm():
             return
@@ -398,7 +409,7 @@ class Preprocessor:
     def __confirm(self):
         answer = ""
         while answer not in ['y', 'n']:
-            answer = input('Are you sure you want to continue, this will delete all previously generated experiment data? [Y/N] ').lower()
+            answer = input('Are you sure you want to continue, this will delete all data in ' + self.graphs_dir + ' and ' + self.grouped_dir + ' ? [Y/N] ').lower()
         return answer == 'y'
 
 if __name__ == "__main__":
@@ -427,8 +438,9 @@ if __name__ == "__main__":
         '24_hour': 60 * 60 * 24
     }
 
-    crops_test = {
-        '1_hour': 60 * 60
+    crops_min = {
+        '1_hour': 60 * 60,
+        '3_hour': 60 * 60 * 3
     }
 
     data_dir = args.data_dir
@@ -445,4 +457,4 @@ if __name__ == "__main__":
         df = pd.read_csv(data_file)
         df_emo = pd.read_csv(emotions_file)
         
-    preprocessor.generate_experiment_data(df, df_emo, crops, args.split, args.structureless)
+    preprocessor.generate_experiment_data(df, df_emo, crops, args.split, args.structureless, 'graphs/', 'grouped/')

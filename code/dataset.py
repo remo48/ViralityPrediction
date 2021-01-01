@@ -39,23 +39,14 @@ class Cascade:
 
         return g
     
-    def retrieve_data(self, leaf_ins=False, node_reor=False, emo_data=False):
+    def retrieve_data(self):
         """
         retrieve dgl graph, label and root features from cascade data structure.
         If respective arg is set to True, perform data augmentation
-        TODO: adjust for multiple target variables
         """
         
         g = self.make_graph()
         e = self.emo
-
-        if leaf_ins:
-            g = leaf_insertion(g)
-        if node_reor:
-            g = node_reordering(g)
-            
-        #if emo_data:
-        #    e = perturbate(e, emo_data[self.y.item()]['mean'], emo_data[self.y.item()]['cov'])
 
         return (g, e)
     
@@ -67,121 +58,61 @@ class CascadeData(Dataset):
     one for trainin and one for validation or testing
     """
 
-    def __init__(self, list_IDs, data_dir, 
+    def __init__(self, 
+                list_IDs, 
+                graphs_dir,
+                cascade_size_file,
+                categorical=False,
                 variant='',
                 structureless = False,
-                sample = False,
-                emo_pert = False,
-                leaf_ins = False,
-                node_reor = False,
                 test=False):
         """
         Initialize class.
         In :
             - list_IDs: list of ids to load
-            - sample : whether to apply sampling to ids
-            - leaf_ins, node_reor, emo_pert: whether to apply espective data 
-          augmentation to loaded cascades
             - variant: crop e.g. "1000_tweets"
             - structureless: whether to load the variant without node depth 
             and (log of) number of children  
             - test: load test (rather than train) data
         """
 
-        self.leaf_ins = leaf_ins
-        self.node_reor = node_reor
-
-        # prepend underscore to variant to load cascade with name ID_variant
         self.variant = ['', '_' + variant][variant != '']
         self.structureless = ['', '_structureless'][structureless]
         self.test = ['', '_test'][test]
-        self.data_dir = data_dir
 
         self.log = {
             'variant': variant,
             'structureless': structureless,
-            'sample': sample,
-            'emo_pert': emo_pert,
-            'leaf_ins': self.leaf_ins,
-            'node_reor': self.node_reor
         }
 
-        'Initialization'
-        if sample:
-            list_IDs = self.sample(list_IDs)    
-        if emo_pert:
-            self.emo_data = self.get_emo_data(data_file=self.data_dir + 'grouped' + self.variant + self.test + '.csv')
-        else:
-            self.emo_data = False
+        target = 'cascade_size_log'
+        if categorical:
+            target = 'category'
 
         shuffle(list_IDs)
 
         self.list_IDs = list_IDs
 
-        df_cascade_size = pd.read_csv(self.data_dir + 'cascade_size.csv')
+        df_cascade_size = pd.read_csv(cascade_size_file)
         self.cascades = []
-        self.cascade_sizes = []
+        self.y = []
         for ID in list_IDs:
             cascade_id = ID + self.variant + self.structureless + self.test
-            self.cascades.append(ld(cascade_id, self.data_dir + 'graphs/').retrieve_data(self.leaf_ins, self.node_reor, self.emo_data))
-            size = df_cascade_size.loc[df_cascade_size['cascade_id'] == int(ID), ['cascade_size_log']].values
-            self.cascade_sizes.append(th.tensor(size, dtype=th.float32))
+            self.cascades.append(ld(cascade_id, graphs_dir).retrieve_data())
+            y = df_cascade_size.loc[df_cascade_size['cascade_id'] == int(ID), target].values
+            if categorical:
+                self.y.append(th.tensor(y).long())
+            else:
+                self.y.append(th.tensor([y], dtype=th.float32))
+
 
     def __len__(self):
-        # Denotes the total number of samples
         return len(self.list_IDs)
 
     def __getitem__(self, index):
-        # Generates one sample of data
-        
         ID = self.list_IDs[index]
 
         g, emo = self.cascades[index]
-        y = self.cascade_sizes[index]
+        y = self.y[index]
 
         return th.Tensor([int(ID)]), g, y, emo
-
-    def sample(self, ids):
-        # sample ids
-
-        # load cascade "embedding"
-        df = pd.read_csv(self.data_dir + 'grouped' + self.variant + '.csv')
-        # select embeddings of cascades to load with the dataloader
-        df = df[df.cascade_id.isin(ids)].reset_index()
-        # drop emotions
-        X = df.iloc[:, 2:12].values
-        y = df.veracity.values
-
-        sampler = IterativeSampler()
-
-        # retireve only the indices in the original data frame
-        print('sampling')
-        # retireve indices AS POSITION IN THE DF, NOT CASCADE IDS of cascades
-        # to sample, ignore sampled data X and labels y
-        _, _, d = sampler.fit_sample(X, y)
-
-        # get casde ids from indices in the df
-        ids = df.loc[list(d.values()), 'cascade_id'].astype(str).tolist()
-
-        return ids
-        # alternative : return ids without doubles
-        # return list(set(ids)
- 
-    def get_emo_data(self, data_file):
-        """
-        Function that retrieves the mean and covariance of the root features
-        of the true and false cascades. Used for root feature perturbation 
-        """
-        
-        cols = ['sadness', 'anticipation', 'disgust', 'surprise', 'anger', 'joy', 'fear', 'trust']
-        
-        df = pd.read_csv('../data/grouped.csv')
-        
-        X_pos = df[df.veracity == 1][cols].values
-        X_neg = df[df.veracity == 0][cols].values
-        
-        dpos = {'mean': np.mean(X_pos, axis=0), 'cov': np.cov(X_pos, rowvar=0)}
-        dneg = {'mean': np.mean(X_neg, axis=0), 'cov': np.cov(X_neg, rowvar=0)}
-        
-        return {1: dpos, 0: dneg}
-

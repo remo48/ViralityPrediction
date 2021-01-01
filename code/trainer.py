@@ -1,6 +1,7 @@
+import copy
 import torch as th
 
-from callbacks import CallbackContainer, EarlyStopping, History, Printer, callback
+from callbacks import CallbackContainer, History, Printer
 from utils import *
 import math
 
@@ -54,6 +55,9 @@ class DeepTreeTrainer:
 
 
     def fit(self, loader, val_loader=None, num_epoch=50, cuda_device=-1, verbose=1):
+
+        best_loss = 1e15
+        self.best_model_state = None
 
         self.model.train(mode=True)
 
@@ -114,8 +118,11 @@ class DeepTreeTrainer:
                 callback_container.on_batch_end(step, batch_logs)
 
             if val_loader is not None:
-                eval_logs = self.evaluate(val_loader, cuda_device, verbose=0)
+                eval_logs = self.evaluate(val_loader, cuda_device, verbose=0, best=False)
                 epoch_logs.update(eval_logs)
+                if eval_logs['val_loss'] < best_loss:
+                    best_loss = eval_logs['val_loss']
+                    self.best_model_state = copy.deepcopy(self.model.state_dict())
 
             if self._has_Scheduler_tree:
                 self.scheduler_tree.step()
@@ -134,8 +141,11 @@ class DeepTreeTrainer:
         callback_container.on_train_end(epoch_logs)
 
 
-    def evaluate(self, loader, cuda_device=-1, verbose=1):
+    def evaluate(self, loader, cuda_device=-1, verbose=1, best=True):
         self.model.train(mode=False)
+
+        if best and self.best_model_state:
+            self.model.load_state_dict(self.best_model_state)
 
         device = set_device(cuda_device)
 
@@ -163,8 +173,11 @@ class DeepTreeTrainer:
         return eval_logs
         
 
-    def predict(self, loader, cuda_device=-1, verbose=1):
+    def predict(self, loader, cuda_device=-1, verbose=1, best=True):
         self.model.train(mode=False)
+
+        if best and self.best_model_state:
+            self.model.load_state_dict(self.best_model_state)
 
         device = set_device(cuda_device)
         out_list = []

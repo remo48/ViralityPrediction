@@ -12,7 +12,6 @@ import torch as th
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import argparse
-from datetime import datetime
 from utils import *
 from model import DeepTreeLSTMRegressor
 from dataset import CascadeData
@@ -23,6 +22,7 @@ def main(args):
     verb = args.verbose
     data_dir = '../data/'
     graphs_dir = '../data/graphs/'
+    cascade_size_file = data_dir + 'cascade_size.csv'
     out_dir = '../results/'
 
     cuda_id = args.cuda_id
@@ -35,8 +35,8 @@ def main(args):
     train_ids = np.array([ID.split('_')[0] for ID in os.listdir(graphs_dir) if args.variant in ID and 'test' not in ID])
     test_ids = np.unique([ID.split('_')[0] for ID in os.listdir(graphs_dir) if args.variant + '_test' in ID])
 
-    train_set = CascadeData(train_ids, data_dir, variant=args.variant)
-    test_set = CascadeData(test_ids, data_dir, variant=args.variant, test=True)
+    train_set = CascadeData(train_ids, graphs_dir, cascade_size_file, variant=args.variant, structureless=args.structureless)
+    test_set = CascadeData(test_ids, graphs_dir, cascade_size_file, variant=args.variant, structureless=args.structureless, test=True)
 
     train_generator = DataLoader(train_set, collate_fn=cascade_batcher(device), batch_size=args.batch_size, num_workers=8)
     test_generator = DataLoader(test_set, collate_fn=cascade_batcher(device), batch_size=args.batch_size, num_workers=8)

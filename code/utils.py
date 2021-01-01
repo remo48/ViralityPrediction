@@ -66,18 +66,20 @@ class Logger:
             sys.stdout.flush()
 
 
+def get_class_weights(dataloader):
+    target_list = []
+    counts = []
 
+    for _,_,t,_ in dataloader:
+        target_list.append(t)
+    target_list = th.tensor(target_list).long()
 
-def class_ratio(gen):
-    # calculate ratio of negative to positive examples for loss weight parameter
-    counts = collections.Counter(th.cat([b.y for b in gen]).flatten().tolist())
-    return counts[0.] / counts[1.]
+    for i in target_list.unique():
+        counts.append((target_list == i).sum())
 
+    class_weights = 1./th.tensor(counts, dtype=th.float)
+    return class_weights, class_weights[target_list]
 
-def perturbate(x, m, cov, keep=0.90):
-    # perturbate root feature
-    x = keep * x + (1 - keep) * th.Tensor(np.random.multivariate_normal(m, cov))
-    return x
 
 
 def cascade_batcher(dev):
@@ -114,155 +116,12 @@ def set_device(cuda_id):
         device = 'cuda:' + cuda_id        
     return th.device(device)
 
-
-def calc_metrics(y, y_hat, to_calc, device, criterion=None):
-    """
-    calculate metrics of cascade lstm
-    """    
-    metrics = {}    
-    sig = nn.Sigmoid().to(device)
-    y_prob = sig(y_hat)
-    y_pred = th.round(y_prob).type(th.FloatTensor).to(device)
-    
-    if 'loss' in to_calc and criterion:
-        metrics['loss'] = criterion(y_hat, y).item()
-    
-    if 'acc' in to_calc:
-        eq = th.eq(y, y_pred)
-        metrics['acc'] = float(th.sum(eq)) / len(y)
-        
-    if 'auc' in to_calc:
-        metrics['auc'] = roc_auc_score(y.cpu(), y_prob.cpu())
-    
-    if 'precision' in to_calc:
-        metrics['precision'] = precision_score(y.cpu(), y_pred.cpu(), average='weighted')
-
-    if 'recall' in to_calc:
-        metrics['recall'] = recall_score(y.cpu(), y_pred.cpu(), average='weighted')
-        
-    if 'f1' in to_calc:
-        metrics['f1'] = f1_score(y.cpu(), y_pred.cpu(), average='weighted')
-
-    if 'rmse' in to_calc:
-        metrics['rmse'] = mean_squared_error(y.cpu(), y_hat.cpu())**.5
-
-    if 'mse' in to_calc:
-        metrics['mse'] = mean_squared_error(y.cpu(), y_hat.cpu())
-
-    if 'mae' in to_calc:
-        metrics['mae'] = mean_absolute_error(y.cpu(), y_hat.cpu())
-         
-    return metrics
-
-
 def init_net(net):
-    # initialize weights of cascade lstm
     for name, param in net.named_parameters():
         if 'bias' in name:
             nn.init.constant_(param, 0.0)
         elif 'weight' in name:
             nn.init.xavier_normal_(param)
-            
-            
-to_save = ('h_size', 'lr_tree', 'lr_top', 'decay_tree', 'decay_top', 'p_drop', 'sample',
-           'leaf_ins', 'node_reor', 'emo_pert', 'deep', 'bi', 'structureless', 'variant')
-
-
-def log_results(experiment_id, args, out_dir, epoch, metrics, name='logs_final.csv', to_save=to_save):
-    """
-    log results of cascade lstm
-    """
-    dest = out_dir + name
-    # convert args (model parameters) from command line args to dict
-    args_dict = vars(args)
-    # select args to save in logs
-    log_vars = {k: [args_dict[k]] for k in to_save}
-    log_vars['experiment_id'] = [experiment_id]
-    log_vars['epoch'] = [epoch]
-    # add metrics to model parameters to log
-    log_vars = {**log_vars, **{k: [v] for (k, v) in metrics.items()}}
-    log_vars['bi'], log_vars['deep'] = bool(log_vars['bi']), bool(log_vars['deep']) 
-    df = pd.DataFrame.from_dict(log_vars)
-    
-    # if logs file exists, append to file ; else create it
-    if os.path.exists(dest):
-        df.to_csv(dest, header=False, index=False, mode='a')
-    else:
-        df.to_csv(dest, header=True, index=False, mode='w')
-  
-      
-def node_reordering(dg, iters=5):
-    """
-    Peform node reordering on a graph:
-    In : dgl graph, number of iterations
-    Out : dgl graph
-    Note : CascadeLSTM needs the nodes pointing as re-tweet -> tweet
-        so children are 'predecessors' and parent 'successor'
-    """
-    g = None
-    if iters:
-    
-        g = dg.to_networkx(node_attrs=['X', 'isroot', 'isleaf'])
-
-        for _ in range(iters):
-            # candidate nodes should have children and not be root node
-            candidates = [n for n in g.nodes if next(g.predecessors(n), False) and n != 0]
-            if not candidates: 
-                break
-            # pick focus node among candidates
-            i = np.random.choice(candidates)
-            # children of focus nodes
-            ks = list(g.predecessors(i))
-            parent = list(g.successors(i))[0]
-            # siblings should be child of same parent and be also candidate
-            siblings = set(g.predecessors(parent)).intersection(set(candidates))
-            siblings.discard(i)
-            if siblings:
-                # pick random sibling
-                j = np.random.choice(list(siblings))
-                # disconnect children of focus node
-                g.remove_edges_from([(k, i) for k in ks])
-                # disconnect sibling from parent
-                g.remove_edge(j, parent)
-                # insert focus node between parent and sibling
-                g.add_edge(j, i, id=j - 1)
-                # connect children of focus node to parent
-                g.add_edges_from([(k, parent, {'id': k - 1}) for k in ks])
-        
-    return dgl.from_networkx(g, node_attrs=['X', 'isroot', 'isleaf'])
-
-
-def leaf_insertion(dg, iters=5):
-    """
-    Perform leaf insertion on a graph
-    In : dgl graph, number of iterations
-    Out : dgl graph
-    Note : CascadeLSTM needs the nodes pointing as re-tweet -> tweet
-        so children are 'predecessors' and parent 'successor'
-    """
-            
-    if iters:
-                
-        for _ in range(iters):
-            
-            n = dg.number_of_nodes()
-            # candidate nodes should not have children
-            candidates = [i for i, l in zip(dg.nodes(), dg.ndata['isleaf']) if l]
-            # pick focus node among candidates
-            i = np.random.choice(candidates)
-            # pick w in [0,1]
-            w = np.random.random()
-            x = dg.ndata['X'][i, :]
-            # create children nodes with encoding that sum to encoding of parent
-            x1, x2 = w * x, (1 - w) * x
-            dg.add_nodes(2, {'X': th.cat([x1, x2]).reshape(2, -1),
-                             'isleaf': th.tensor([1, 1]).type(th.float32),
-                             'isroot': th.tensor([0, 0]).type(th.float32)})
-            # connect children nodes to parent
-            dg.add_edges([n, n + 1], [i, i])
-            dg.ndata['isleaf'][i] = 0   
-        
-    return dg
 
 
 samplers = [RandomOverSampler(sampling_strategy=0.3), TomekLinks(), NeighbourhoodCleaningRule()]

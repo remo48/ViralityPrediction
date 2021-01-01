@@ -235,7 +235,6 @@ class DeepTreeLSTMClassifier(DeepTreeLSTM):
 
             net.add_module('d_out', nn.Dropout(p=self.pd))
             net.add_module('l_out', nn.Linear(self.top_sizes[-1], num_classes))
-            net.add_module('tf_out', nn.Sigmoid())
 
         else:
             net.add_module('d', nn.Dropout(p=self.pd))
@@ -245,5 +244,6 @@ class DeepTreeLSTMClassifier(DeepTreeLSTM):
 
     def predict(self, batch, g ,h, c):
         out = self.forward(batch, g, h, c)
-        sig = nn.Sigmoid()
-        return sig(out)
+        y_pred_softmax = th.softmax(out, dim = 1)
+        y_pred_tags = y_pred_softmax.argmax(dim=1)
+        return y_pred_tags
