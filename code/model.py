@@ -55,7 +55,7 @@ class TreeLSTM(nn.Module):
         g.ndata['iou'] = self.cell.W_iou(batch.X)
         g.ndata['h'] = h
         g.ndata['c'] = c
-        # propagate
+
         dgl.prop_nodes_topo(g, 
                             message_func=self.cell.message_func,
                             reduce_func=self.cell.reduce_func,
@@ -63,15 +63,10 @@ class TreeLSTM(nn.Module):
                             )
 
         h = g.ndata.pop('h')
-        
-        # indexes of root nodes
+
         head_ids = th.nonzero(batch.isroot, as_tuple=False).flatten()
-        # h of root nodes
         head_h = th.index_select(h, 0, head_ids)
-        lims_ids = head_ids.tolist() + [g.number_of_nodes()]
-        # average of h of non root node by tree
-        #inner_h = th.cat([th.mean(h[s+1:e,:],dim=0).view(1,-1) for s, e in zip(lims_ids[:-1],lims_ids[1:])])
-        #out = th.cat([head_h, inner_h], dim = 1)
+
         out = head_h
         return out
 
@@ -88,7 +83,7 @@ class BiDiTreeLSTM(nn.Module):
         g.ndata['iou'] = cell.W_iou(X)
         g.ndata['h'] = h
         g.ndata['c'] = c
-        # propagate
+
         dgl.prop_nodes_topo(g,
                             message_func=cell.message_func,
                             reduce_func=cell.reduce_func,
@@ -115,16 +110,11 @@ class BiDiTreeLSTM(nn.Module):
         h_bottom_up = self.propagate(g, self.cell_bottom_up, batch.X, h, c)
         
         g_rev = dgl.reverse(g)
-        #g_rev = dgl.batch([gu.reverse() for gu in dgl.unbatch(batch.graph)])
         h_top_down = self.propagate(g_rev, self.cell_top_down, th.cat([batch.X, h_bottom_up], dim = 1), h, c)
         
-        
-        # indexes of root nodes
         root_ids = th.nonzero(batch.isroot, as_tuple=False).flatten()
-        # h of root nodes
         root_h_bottom_up = th.index_select(h_bottom_up, 0, root_ids)
-        
-        # limit of ids of trees in graphs batch
+
         lims_ids = root_ids.tolist() + [g.number_of_nodes()]
         
         trees_h = [h_top_down[s:e,:] for s, e in zip(lims_ids[:-1],lims_ids[1:])]
@@ -132,7 +122,6 @@ class BiDiTreeLSTM(nn.Module):
         leaves_h_top_down = th.cat([th.mean(th.index_select(tree, 0, th.nonzero(leaves, as_tuple=False).flatten()),dim=0).view(1,-1) for (tree, leaves) in zip(trees_h, trees_isleaf)], dim = 0)
                 
         out = th.cat([root_h_bottom_up, leaves_h_top_down], dim = 1)
-        #out = leaves_h_top_down
         return out
 
 class DeepTreeLSTM(nn.Module):

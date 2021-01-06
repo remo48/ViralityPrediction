@@ -1,19 +1,14 @@
-from operator import index
-from networkx.algorithms.centrality import group
+from pathlib import Path
 import numpy as np
 import pandas as pd
-import datetime
 import os
 import sys
 import argparse
 import shutil
 from random import shuffle
 import torch as th
-from tqdm import tqdm
 import networkx as nx
-from collections import Counter
-from itertools import chain
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 
 from dataset import Cascade
@@ -360,10 +355,6 @@ class Preprocessor:
         self.graphs_dir = os.path.join(self.data_dir, graphs_dir)
         self.grouped_dir = os.path.join(self.data_dir, grouped_dir)
 
-
-        if not self.__confirm():
-            return
-
         self.__cleanup()
 
         for k,v in crops_dict.items():
@@ -395,6 +386,18 @@ class Preprocessor:
                 
     
     def __cleanup(self):
+        def confirm():
+            answer = ""
+            while answer not in ['y', 'n']:
+                answer = input('Are you sure you want to continue, this will delete all data in ' + self.graphs_dir + ' and ' + self.grouped_dir + ' ? [Y/N] ').lower()
+            return answer == 'y'
+
+        for dir in [self.graphs_dir, self.grouped_dir]:
+            Path(dir).mkdir(parents=True, exist_ok=True)
+
+        if not confirm():
+            sys.exit(0)
+
         for dir in [self.graphs_dir, self.grouped_dir]:
             for filename in os.listdir(dir):
                 file_path = os.path.join(dir, filename)
@@ -406,11 +409,6 @@ class Preprocessor:
                 except Exception as e:
                     print('Failed to delete %s. Reason: %s' % (file_path, e))
 
-    def __confirm(self):
-        answer = ""
-        while answer not in ['y', 'n']:
-            answer = input('Are you sure you want to continue, this will delete all data in ' + self.graphs_dir + ' and ' + self.grouped_dir + ' ? [Y/N] ').lower()
-        return answer == 'y'
 
 if __name__ == "__main__":
     try: os.chdir(os.path.dirname(sys.argv[0]))

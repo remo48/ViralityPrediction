@@ -8,6 +8,13 @@ def sigmoid(x):
     return 1/(1 + np.exp(-x))
 
 class MetricContainer:
+    '''
+    Container for all metrics used during training.
+
+    Args:
+        metrics: list of string names of metrics to use
+        prefix: prefix for metric names (e.g. val_)
+    '''
     
     def __init__(self, metrics, prefix=''):
         self.metrics = []
@@ -34,6 +41,10 @@ class MetricContainer:
         return metric_logs
 
 class MetricCallback(callback):
+    '''
+    Callback function, which ensures that metrics are calculated during training
+    '''
+
     def __init__(self, metric_container):
         self.metric_container = metric_container
         self.metrics = self.metric_container.metrics
@@ -43,6 +54,9 @@ class MetricCallback(callback):
             metric.reset()
 
 class Metric(object):
+    '''
+    Abstract class for Metrics
+    '''
 
     def __call__(self, y_pred, y_true):
         raise NotImplementedError('Custom Metrics must implement this function')

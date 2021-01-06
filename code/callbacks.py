@@ -7,7 +7,8 @@ import torch as th
 
 class CallbackContainer():
     """
-    Container holding a list of callbacks.
+    Container holding a list of callbacks. To use a callback function in the trainer module, 
+    its corresponding object must be appended to the callback container.
     """
     def __init__(self, callbacks=None):
         callbacks = callbacks or []
@@ -93,6 +94,7 @@ class History(callback):
     """
     Callback that records loss and metrics history into a `History` object.
     """
+    
     def on_train_begin(self, logs=None):
         self.epoch_metrics = {}
 

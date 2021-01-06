@@ -1,20 +1,12 @@
 import os, sys
 import time
 import collections
-import numpy as np
-import pandas as pd
 import torch as th
 import torch.nn as nn
 import dgl
 import matplotlib.pyplot as plt
 import networkx as nx
-from random import shuffle
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, mean_squared_error, mean_absolute_error, accuracy_score
-from copy import deepcopy
 import time
-
-from imblearn.under_sampling import RandomUnderSampler, TomekLinks, NeighbourhoodCleaningRule
-from imblearn.over_sampling import RandomOverSampler
 
 # load batch
 def ld(ID, graphs_dir):
@@ -81,7 +73,6 @@ def get_class_weights(dataloader):
     return class_weights, class_weights[target_list]
 
 
-
 def cascade_batcher(dev):
     def batcher_dev(batch):
         """
@@ -116,43 +107,10 @@ def set_device(cuda_id):
         device = 'cuda:' + cuda_id        
     return th.device(device)
 
+
 def init_net(net):
     for name, param in net.named_parameters():
         if 'bias' in name:
             nn.init.constant_(param, 0.0)
         elif 'weight' in name:
             nn.init.xavier_normal_(param)
-
-
-samplers = [RandomOverSampler(sampling_strategy=0.3), TomekLinks(), NeighbourhoodCleaningRule()]
-
-class IterativeSampler():
-    """
-    Applies a sequence of samplers. If the "return_ids" parameter
-    is set to True, also returns the inices in the data frame or
-    the matrix of the samples that have been selected. 
-    """
-    def __init__(self, samplers=samplers, return_ids=True):
-        self.samplers = samplers
-        self.return_ids = return_ids
-        if return_ids:
-            self.dict_ids = {}
-        
-    def fit_sample(self, X, y):
-
-        for sampler in self.samplers:
-            X, y = sampler.fit_sample(X, y)
-            if self.return_ids:
-                new_ids = list(range(len(y)))
-                if self.dict_ids:
-                    d0 = dict(zip(new_ids, sampler.sample_indices_))
-                    d = {k: self.dict_ids[v] for k, v in d0.items()}
-                else:
-                    d = dict(zip(new_ids, sampler.sample_indices_))
-                    
-                self.dict_ids = d
-                
-        if self.return_ids:
-            return X, y, self.dict_ids
-        else:
-            return X, y

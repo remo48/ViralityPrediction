@@ -14,10 +14,8 @@ class Cascade:
     is save and then loaded in ".pt" ~ pytorch format.
     """
     def __init__(self, cascade_id, X, emo, src, dest, isleaf):
-        # init the cascade data structure with data
 
         self.cascade_id = cascade_id
-        # node covariates
         self.X = X
         self.size = X.shape[0]
         self.isleaf = isleaf
@@ -53,9 +51,18 @@ class Cascade:
 
 class CascadeData(Dataset):
     """
-    Class that loads all the ids it is initialized with.
+    Class that loads all the id's it is initialized with.
     Note that two instances are utilized when learning ; 
     one for trainin and one for validation or testing
+
+    args:
+        list_IDs: list of all cascade id's to use
+        graphs_dir: directory of ".pt" files
+        cascade_size_file: path to file containing the labels
+        categorical: indicates whether to use categorical or absolute labels
+        variant: the variant used for training the model
+        structureless: use structureless model variation
+        test: the id's are test id's
     """
 
     def __init__(self, 
@@ -66,15 +73,7 @@ class CascadeData(Dataset):
                 variant='',
                 structureless = False,
                 test=False):
-        """
-        Initialize class.
-        In :
-            - list_IDs: list of ids to load
-            - variant: crop e.g. "1000_tweets"
-            - structureless: whether to load the variant without node depth 
-            and (log of) number of children  
-            - test: load test (rather than train) data
-        """
+
 
         self.variant = ['', '_' + variant][variant != '']
         self.structureless = ['', '_structureless'][structureless]
